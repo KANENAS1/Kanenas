@@ -1,0 +1,2 @@
+# Kanenas
+Crypto Trading bot
