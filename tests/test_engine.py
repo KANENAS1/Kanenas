@@ -193,6 +193,13 @@ class TestReporting(unittest.TestCase):
         self.assertTrue(any("short" in c.lower() or "Annualised" in c for c in rep.caveats))
         self.assertNotIn("Annualised        +", rep.render())
 
+    def test_report_warns_when_the_cap_sets_the_size(self):
+        """A user reading --risk deserves to know when it is not the binding rule."""
+        _, rep = run_backtest(MarketSimulator(SimulatorConfig(seed=2024), bars=3_000).stream(),
+                              EngineConfig())
+        self.assertIn("position_cap", rep.sized_by)
+        self.assertTrue(any("exposure cap" in c for c in rep.caveats))
+
     def test_backtest_leaves_no_open_position(self):
         eng, rep = run_backtest(MarketSimulator(SimulatorConfig(seed=21), bars=1_500).stream(),
                                 EngineConfig())

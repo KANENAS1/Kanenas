@@ -128,6 +128,22 @@ class TestKillSwitches(unittest.TestCase):
         rm.note_trade_closed(is_win=True, loss_streak=0, bar_index=10)
         self.assertTrue(rm.evaluate_entry(Direction.LONG, 1.0, 100.0, 1e4, self.ind, 11).approved)
 
+    def test_binding_constraint_is_recorded(self):
+        """Which rule set the size is diagnostic information, not a detail.
+
+        On tight ATR stops the exposure cap binds instead of the risk budget,
+        so effective risk is far below the configured fraction.
+        """
+        rm = RiskManager(RiskConfig(risk_per_trade=0.9, max_position_pct=0.35,
+                                    round_trip_cost_bps=0.0))
+        rm.evaluate_entry(Direction.LONG, 1.0, 100.0, 10_000.0, self.ind, 10)
+        self.assertEqual(rm.sized_by.get("position_cap"), 1)
+
+        loose = RiskManager(RiskConfig(risk_per_trade=0.0001, max_position_pct=0.9,
+                                       round_trip_cost_bps=0.0))
+        loose.evaluate_entry(Direction.LONG, 1.0, 100.0, 10_000.0, self.ind, 10)
+        self.assertEqual(loose.sized_by.get("risk_budget"), 1)
+
     def test_rejections_are_tallied(self):
         rm = RiskManager(RiskConfig(min_confidence=0.9, round_trip_cost_bps=0.0))
         for _ in range(3):

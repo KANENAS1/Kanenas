@@ -71,6 +71,8 @@ class RiskManager:
         self.day_start_equity = 0.0
         self.day_pnl = 0.0
         self.rejections: dict[str, int] = {}
+        #: how often each constraint ended up deciding the size
+        self.sized_by: dict[str, int] = {}
 
     # ------------------------------------------------------------ bookkeeping
 
@@ -140,13 +142,24 @@ class RiskManager:
         risk_amount = equity * cfg.risk_per_trade * (0.5 + 0.5 * min(1.0, confidence))
         qty = risk_amount / stop_distance
 
+        # Which constraint actually decides the size is worth recording.  On
+        # short timeframes ATR stops are tight enough that risk_per_trade would
+        # imply a leveraged position, so the notional cap binds on nearly every
+        # trade and the *effective* risk is far below the configured fraction.
+        # That is safe - it only ever sizes down - but a user reading
+        # "--risk 0.0075" deserves to know when it is not the binding rule.
+        binding = "risk_budget"
+
         # Cap 1: notional exposure ceiling
         max_notional = equity * cfg.max_position_pct * cfg.leverage
         if qty * price > max_notional:
             qty = max_notional / price
+            binding = "position_cap"
         # Cap 2: never risk more cash than we hold (no accidental leverage)
         if qty * price > equity * cfg.leverage:
             qty = equity * cfg.leverage / price
+            binding = "no_leverage"
+        self.sized_by[binding] = self.sized_by.get(binding, 0) + 1
 
         notional = qty * price
         if notional < cfg.min_trade_notional:

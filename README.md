@@ -204,6 +204,27 @@ about what a trade costs. Result: `High fees` −9.94% → 0.00%, `Thin book`
 That is the loop this repo is built around: measure honestly, find the failure,
 fix the cause.
 
+### What `--risk` actually does
+
+Worth knowing before you tune it. Sizing asks for
+`equity x risk_per_trade / (atr_stop_mult x ATR)`, but on 1-minute bars an ATR
+stop is often only ~0.2% away from entry — so risking 0.75% of equity would need
+a position several times your account, i.e. leverage. The no-leverage exposure
+cap binds first, and a real stop-out costs around **0.13%** of capital rather
+than the 0.75% configured.
+
+That is safe: the cap only ever sizes *down*. But a knob that silently does not
+do what it says is a trap, so the report now names the binding rule:
+
+```
+  Sized by: position_cap=713
+  ⚠ Position size was set by the exposure cap, not --risk, on 100% of entries.
+    A typical stop-out cost 0.13% of starting capital, not the 0.75% configured.
+```
+
+To make `--risk` the binding constraint, use a wider stop (`--stop-atr 6`) or a
+higher timeframe (`--interval 1h`), where ATR is a larger share of price.
+
 ## Testing
 
 ```bash

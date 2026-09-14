@@ -63,6 +63,8 @@ class BacktestReport:
     exit_breakdown: dict = field(default_factory=dict)
     strategy_attribution: dict = field(default_factory=dict)
     risk_rejections: dict = field(default_factory=dict)
+    sized_by: dict = field(default_factory=dict)
+    avg_risk_per_trade: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -111,6 +113,8 @@ class BacktestReport:
         ]
         if self.exit_breakdown:
             lines += ["", "  Exits: " + "  ".join(f"{k}={v}" for k, v in sorted(self.exit_breakdown.items()))]
+        if self.sized_by:
+            lines += ["  Sized by: " + "  ".join(f"{k}={v}" for k, v in sorted(self.sized_by.items()))]
         if self.risk_rejections:
             lines += ["  Risk vetoes: " + "  ".join(f"{k}={v}" for k, v in sorted(self.risk_rejections.items()))]
         if self.caveats:
@@ -181,7 +185,26 @@ def summarise(engine: TradingEngine, bars_per_year: float) -> BacktestReport:
     span_seconds = max(p.equity_curve[-1].ts - p.equity_curve[0].ts, 0.0)
     sample_days = span_seconds / 86_400.0 if span_seconds else n / bars_per_year * 365.0
 
+    # What fraction of equity a stop-out actually costs, as sized.
+    sized = engine.risk.sized_by
+    capped = sized.get("position_cap", 0) + sized.get("no_leverage", 0)
+    total_sized = sum(sized.values())
+    configured_risk = engine.risk.cfg.risk_per_trade
+    # Measure the real figure from the trades that actually hit their stop,
+    # rather than recomputing it from config - what a stop-out *cost* is the
+    # only number worth quoting here.
+    avg_risk = 0.0
+    stopped = [t for t in trades if t.reason.value == "SL"]
+    if stopped and p.starting_cash > 0:
+        avg_risk = abs(statistics.fmean(t.net_pnl for t in stopped)) / p.starting_cash
+
     caveats: List[str] = []
+    if total_sized and capped / total_sized > 0.5 and configured_risk > 0:
+        caveats.append(
+            f"Position size was set by the exposure cap, not --risk, on "
+            f"{capped / total_sized:.0%} of entries. A typical stop-out cost "
+            f"{avg_risk:.2%} of starting capital, not the {configured_risk:.2%} configured - "
+            f"ATR stops this tight would need leverage to risk the full amount.")
     if sample_days < MIN_DAYS_TO_ANNUALISE:
         caveats.append(
             f"Sample is {sample_days:.1f} days. Annualised return and Calmar are withheld - "
@@ -234,6 +257,8 @@ def summarise(engine: TradingEngine, bars_per_year: float) -> BacktestReport:
         exit_breakdown=exit_breakdown,
         strategy_attribution=engine.ensemble.snapshot(),
         risk_rejections=dict(engine.risk.rejections),
+        sized_by=dict(engine.risk.sized_by),
+        avg_risk_per_trade=avg_risk,
     )
 
 
