@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kanenas"
+version = "1.0.0"
+description = "Multi-strategy, risk-managed crypto trading bot with live dashboards. Paper-first, zero dependencies."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name = "Kanenas"}]
+keywords = ["trading", "crypto", "bitcoin", "backtesting", "quant", "algotrading"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: Office/Business :: Financial :: Investment",
+  "Intended Audience :: Developers",
+]
+# No runtime dependencies. This is deliberate - see README, "Why no dependencies".
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["playwright>=1.40"]   # only for capturing dashboard screenshots
+
+[project.scripts]
+kanenas = "kanenas.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["kanenas*"]
+
+[tool.setuptools.package-data]
+"kanenas.ui" = ["static/*.html"]

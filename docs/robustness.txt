@@ -1,0 +1,37 @@
+Running 24 independent markets x 4000 bars…
+
+  running   1/24  |█                           |  last +13.46%
+  running   2/24  |██                          |  last +11.52%
+  running   3/24  |███                         |  last +16.83%
+  running   4/24  |████                        |  last +11.17%
+  running   5/24  |█████                       |  last +11.17%
+  running   6/24  |███████                     |  last +11.14%
+  running   7/24  |████████                    |  last +14.57%
+  running   8/24  |█████████                   |  last +13.39%
+  running   9/24  |██████████                  |  last +17.15%
+  running  10/24  |███████████                 |  last +11.67%
+  running  11/24  |████████████                |  last +13.85%
+  running  12/24  |██████████████              |  last  +9.70%
+  running  13/24  |███████████████             |  last +14.32%
+  running  14/24  |████████████████            |  last +13.54%
+  running  15/24  |█████████████████           |  last +13.49%
+  running  16/24  |██████████████████          |  last +14.28%
+  running  17/24  |███████████████████         |  last +10.94%
+  running  18/24  |█████████████████████       |  last  +9.94%
+  running  19/24  |██████████████████████      |  last  +7.40%
+  running  20/24  |███████████████████████     |  last  +9.20%
+  running  21/24  |████████████████████████    |  last  +7.80%
+  running  22/24  |█████████████████████████   |  last  +7.29%
+  running  23/24  |██████████████████████████  |  last +10.32%
+  running  24/24  |████████████████████████████|  last +10.87%
+
+╔══ ROBUSTNESS · 24 independently seeded markets ════════════╗
+  Profitable runs            100.0%
+  Return  p05/med/p95    +7.40% /  +11.52% /  +16.83%
+  Sharpe  p05/med/p95    38.96  /   61.00  /   77.58
+  MaxDD   med/p95         1.14% /    1.50%
+  WinRate med            73.40%
+  Worst run              +7.29%      Best run   +17.15%
+╚════════════════════════════════════════════════════════════╝
+
+  VERDICT: holds up across markets. Still simulated - paper trade it next.

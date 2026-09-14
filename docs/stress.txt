@@ -1,0 +1,20 @@
+Stress testing across 8 markets x 3000 bars per scenario…
+╔══ STRESS TEST · can this strategy be broken? ════════════════════════════════╗
+  scenario         median    worst     best    win%   maxDD  trades   verdict
+  ────────────────────────────────────────────────────────────────────────────
+  Baseline          7.96%    4.18%   10.45%   72.0%   0.85%     206   survives
+  Random walk      -3.45%   -5.16%   -2.89%   31.3%   3.55%      70   expected (costs, no edge)
+  Whipsaw          -5.79%   -6.64%   -3.09%   30.6%   6.23%     114   BREAKS
+  High fees         0.00%   -0.41%    0.00%    0.0%   0.00%       0   stood down (costs > edge)
+  Thin book         0.09%   -1.41%    0.64%   80.0%   0.31%       5   survives
+  Flash crashes     1.19%  -16.25%   28.02%   52.8%  12.93%      92   survives
+  Brutal           -8.73%  -15.16%   -0.32%   37.8%   9.68%      24   BREAKS
+  ────────────────────────────────────────────────────────────────────────────
+  Baseline      the default simulated market
+  Random walk   zero drift, no regime persistence - no trend to find
+  Whipsaw       regimes flip every few bars
+  High fees     20bp taker fee instead of 5bp
+  Thin book     wide spread, shallow depth, heavy impact
+  Flash crashes frequent violent jumps through stops
+  Brutal        no trend + thin book + high fees + jumps, all at once
+╚════════════════════════════════════════════════════════════════════════════╝

@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KANENAS · Trading Terminal</title>
+<style>
+  :root{
+    --bg:#07060b; --panel:#0d0b14; --panel2:#120f1c; --line:#241c38;
+    --magenta:#ff3cac; --cyan:#3ce9e9; --green:#38e28f; --red:#ff4e64;
+    --amber:#ffc74a; --text:#e8ecf4; --dim:#7a7898; --faint:#3b3654;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:
+      radial-gradient(1200px 600px at 20% -10%, rgba(255,60,172,.12), transparent 60%),
+      radial-gradient(900px 500px at 90% 110%, rgba(60,233,233,.10), transparent 60%),
+      var(--bg);
+    color:var(--text); font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    padding:10px; min-height:100%;
+  }
+  .grid{display:grid;gap:8px;grid-template-columns:260px 1fr 260px;
+        grid-template-areas:"head head head" "wallet chart streak" "signals signals book"
+                            "equity trades trades" "log log log";}
+  @media (max-width:980px){
+    .grid{grid-template-columns:1fr;
+          grid-template-areas:"head" "wallet" "chart" "streak" "signals" "book" "equity" "trades" "log";}
+  }
+  .panel{background:linear-gradient(180deg,var(--panel),var(--panel2));
+         border:1px solid var(--line);border-radius:6px;padding:9px 11px;position:relative;overflow:hidden}
+  .panel::before{content:"";position:absolute;inset:0;pointer-events:none;
+         background:repeating-linear-gradient(0deg,rgba(255,255,255,.014) 0 1px,transparent 1px 3px)}
+  .panel.hot{border-color:var(--magenta);box-shadow:0 0 22px rgba(255,60,172,.18) inset,0 0 14px rgba(255,60,172,.10)}
+  h2{font-size:9.5px;letter-spacing:.22em;color:var(--magenta);margin:0 0 8px;font-weight:600;text-transform:uppercase}
+  .head{grid-area:head;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+        border:1px solid var(--line);border-radius:6px;padding:8px 12px;background:rgba(13,11,20,.75)}
+  .brand{color:var(--magenta);font-weight:700;letter-spacing:.16em}
+  .sep{color:var(--faint)}
+  .kv{display:flex;gap:6px;align-items:baseline}
+  .kv b{font-weight:600;color:var(--text)}
+  .kv span{color:var(--dim);font-size:9.5px;letter-spacing:.14em}
+  .spacer{flex:1}
+  .badge{padding:2px 8px;border-radius:3px;font-size:9.5px;letter-spacing:.18em;border:1px solid}
+  .badge.paper{color:var(--cyan);border-color:var(--cyan)}
+  .badge.live{color:var(--red);border-color:var(--red);animation:pulse 1.6s infinite}
+  @keyframes pulse{50%{opacity:.45}}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;
+       box-shadow:0 0 8px var(--green);animation:pulse 1.4s infinite}
+  .wallet{grid-area:wallet}.chart{grid-area:chart}.streak{grid-area:streak}
+  .signals{grid-area:signals}.book{grid-area:book}.equity{grid-area:equity}
+  .trades{grid-area:trades}.log{grid-area:log}
+  .big{font-size:27px;font-weight:700;letter-spacing:-.01em;line-height:1.1}
+  .huge{font-size:44px;font-weight:700;line-height:1}
+  .up{color:var(--green)}.down{color:var(--red)}.flat{color:var(--dim)}
+  .mag{color:var(--magenta)}.cy{color:var(--cyan)}.am{color:var(--amber)}
+  .row{display:flex;justify-content:space-between;gap:8px;padding:1.5px 0}
+  .row span:first-child{color:var(--dim)}
+  canvas{display:block;width:100%;border-radius:3px}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  th{text-align:left;color:var(--dim);font-weight:500;font-size:9px;letter-spacing:.14em;
+     padding:2px 6px 5px;border-bottom:1px solid var(--line)}
+  td{padding:2.5px 6px;border-bottom:1px solid rgba(36,28,56,.4);white-space:nowrap}
+  tbody tr:hover{background:rgba(255,60,172,.06)}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .sig{display:grid;grid-template-columns:78px 62px 1fr 46px;gap:8px;align-items:center;padding:3px 0}
+  .sig .why{color:var(--faint);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .meter{height:6px;background:rgba(59,54,84,.5);border-radius:3px;overflow:hidden}
+  .meter i{display:block;height:100%;border-radius:3px}
+  .depth{display:grid;grid-template-columns:82px 1fr 52px;gap:7px;align-items:center;padding:1.2px 0;
+         font-variant-numeric:tabular-nums}
+  .depth .bar{height:9px;border-radius:2px}
+  .logline{display:grid;grid-template-columns:62px 52px 52px 1fr;gap:8px;padding:1.2px 0;
+           border-bottom:1px solid rgba(36,28,56,.28);white-space:nowrap;overflow:hidden}
+  .logline .msg{overflow:hidden;text-overflow:ellipsis}
+  .k-ENTRY{color:var(--cyan)}.k-EXIT{color:var(--magenta)}.k-SKIP{color:var(--faint)}
+  .k-HALT{color:var(--red)}.k-INFO{color:var(--dim)}
+  .halt{background:rgba(255,78,100,.14);border:1px solid var(--red);color:var(--red);
+        padding:5px 9px;border-radius:4px;margin-bottom:7px;letter-spacing:.1em}
+  .muted{color:var(--dim)}
+  .scroll{max-height:186px;overflow-y:auto}
+  .scroll::-webkit-scrollbar{width:6px}
+  .scroll::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+  .disc{margin-top:8px;color:var(--faint);font-size:10px;letter-spacing:.04em;text-align:center}
+</style>
+</head>
+<body>
+<div class="grid">
+
+  <div class="head">
+    <span class="brand">◆ KANENAS</span>
+    <span class="sep">·</span>
+    <b id="symbol">—</b>
+    <span id="modeBadge" class="badge paper">PAPER</span>
+    <span class="muted" id="venue">—</span>
+    <span class="spacer"></span>
+    <div class="kv"><span>PRICE</span><b id="price">—</b></div>
+    <div class="kv"><span>EQUITY</span><b id="equityTop">—</b></div>
+    <div class="kv"><span>RETURN</span><b id="retTop">—</b></div>
+    <div class="kv"><span>TRADES</span><b id="tradesTop">—</b></div>
+    <div class="kv"><span>WIN</span><b id="winTop">—</b></div>
+    <div class="kv"><span>BAR</span><b id="barTop">—</b></div>
+    <span class="dot"></span><b class="cy" id="clock">--:--:--</b>
+  </div>
+
+  <div class="panel hot wallet">
+    <h2>Wallet</h2>
+    <div class="big" id="equity">—</div>
+    <div id="ret" class="muted">—</div>
+    <div style="height:8px"></div>
+    <div class="row"><span>cash</span><b id="cash">—</b></div>
+    <div class="row"><span>realised</span><b id="realised">—</b></div>
+    <div class="row"><span>fees paid</span><b id="fees">—</b></div>
+    <div class="row"><span>peak</span><b id="peak">—</b></div>
+    <div class="row"><span>drawdown</span><b id="dd">—</b></div>
+    <div style="height:9px"></div>
+    <div id="position"></div>
+  </div>
+
+  <div class="panel chart">
+    <h2 id="chartTitle">Price</h2>
+    <canvas id="candles" height="250"></canvas>
+    <div class="row" style="margin-top:6px">
+      <span id="ohlc" class="muted">—</span><b id="chg">—</b>
+    </div>
+  </div>
+
+  <div class="panel streak">
+    <h2>Live Streak</h2>
+    <div class="huge" id="streak">—</div>
+    <div id="streakLabel" class="muted">—</div>
+    <canvas id="streakChart" height="96" style="margin:9px 0"></canvas>
+    <div class="row"><span>win rate</span><b id="winRate">—</b></div>
+    <div class="row"><span>profit factor</span><b id="pf">—</b></div>
+    <div class="row"><span>expectancy</span><b id="exp">—</b></div>
+    <div class="row"><span>best run</span><b id="bestRun" class="up">—</b></div>
+    <div class="row"><span>worst run</span><b id="worstRun" class="down">—</b></div>
+  </div>
+
+  <div class="panel signals">
+    <h2>Signal Matrix · Ensemble</h2>
+    <div id="haltBox"></div>
+    <div id="sigList"></div>
+    <div style="height:7px"></div>
+    <div class="row" style="border-top:1px solid var(--line);padding-top:7px">
+      <span>ENSEMBLE</span><b id="ensDir">—</b>
+    </div>
+    <div class="row"><span id="ensReason" class="muted">—</span><b id="ensScore">—</b></div>
+  </div>
+
+  <div class="panel book">
+    <h2>Order Book</h2>
+    <div id="bookBody"><span class="muted">no book on this feed</span></div>
+  </div>
+
+  <div class="panel equity">
+    <h2>Equity Curve</h2>
+    <canvas id="equityChart" height="176"></canvas>
+    <div class="row" style="margin-top:5px"><span id="eqFrom">—</span><b id="eqTo">—</b></div>
+  </div>
+
+  <div class="panel trades">
+    <h2>Recent Trades</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>SIDE</th><th>EXIT</th><th class="num">ENTRY</th><th class="num">EXIT PX</th>
+          <th class="num">NET</th><th class="num">RETURN</th><th class="num">BARS</th></tr></thead>
+        <tbody id="tradeRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel log">
+    <h2>Execution Log · Live</h2>
+    <div class="scroll" id="logBody" style="max-height:170px"></div>
+    <div class="disc" id="disclaimer"></div>
+  </div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const money = (v, d=2) => (v<0?"-$":"$") + Math.abs(v).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+const pct = v => (v>=0?"+":"") + (v*100).toFixed(2) + "%";
+const cls = v => v>0 ? "up" : (v<0 ? "down" : "flat");
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+/* Canvases are sized in CSS pixels but drawn at devicePixelRatio so the
+   candles stay crisp on a retina screen (and in a screen recording). */
+function ctxFor(id){
+  const cv = $(id), dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = parseInt(cv.getAttribute("height"));
+  if (cv.width !== w*dpr || cv.height !== h*dpr){ cv.width = w*dpr; cv.height = h*dpr; }
+  const c = cv.getContext("2d");
+  c.setTransform(dpr,0,0,dpr,0,0);
+  c.clearRect(0,0,w,h);
+  return {c, w, h};
+}
+
+function drawCandles(data, position){
+  const {c,w,h} = ctxFor("candles");
+  if(!data.length) return;
+  const padR = 78, padB = 16, plotW = w - padR, plotH = h - padB;
+  let hi = -Infinity, lo = Infinity;
+  for(const k of data){ hi = Math.max(hi,k.h); lo = Math.min(lo,k.l); }
+  if(position){ hi = Math.max(hi, position.stop, position.target); lo = Math.min(lo, position.stop, position.target); }
+  const pad = (hi-lo)*0.06 || 1; hi += pad; lo -= pad;
+  const y = p => plotH - (p-lo)/(hi-lo)*plotH;
+  const bw = plotW/data.length, body = Math.max(1, Math.min(9, bw*0.62));
+
+  c.strokeStyle = "rgba(36,28,56,.65)"; c.lineWidth = 1;
+  c.font = "9px ui-monospace,monospace"; c.fillStyle = css("--faint"); c.textBaseline = "middle";
+  for(let i=0;i<=4;i++){
+    const yy = Math.round(plotH*i/4)+0.5;
+    c.beginPath(); c.moveTo(0,yy); c.lineTo(plotW,yy); c.stroke();
+    // nudge the extreme labels inward: textBaseline "middle" would clip half
+    // the glyph off the top and bottom edges of the canvas
+    const ly = Math.min(plotH-5, Math.max(5, yy));
+    c.fillText((lo+(hi-lo)*(1-i/4)).toLocaleString(undefined,{maximumFractionDigits:0}), plotW+6, ly);
+  }
+  data.forEach((k,i)=>{
+    const x = i*bw + bw/2, up = k.c >= k.o;
+    c.strokeStyle = c.fillStyle = up ? css("--green") : css("--red");
+    c.globalAlpha = .9;
+    c.beginPath(); c.moveTo(x, y(k.h)); c.lineTo(x, y(k.l)); c.stroke();
+    const top = y(Math.max(k.o,k.c)), bot = y(Math.min(k.o,k.c));
+    c.fillRect(x-body/2, top, body, Math.max(1, bot-top));
+    c.globalAlpha = 1;
+  });
+  // stop / target rails while a position is open
+  if(position){
+    for(const [p,col,lab] of [[position.stop,css("--red"),"STOP"],[position.target,css("--green"),"TARGET"],
+                              [position.entry,css("--amber"),"ENTRY"]]){
+      const yy = y(p); if(yy<0||yy>plotH) continue;
+      c.save(); c.setLineDash([4,4]); c.strokeStyle = col; c.globalAlpha=.75;
+      c.beginPath(); c.moveTo(0,yy); c.lineTo(plotW,yy); c.stroke(); c.restore();
+      c.fillStyle = col; c.font = "8.5px ui-monospace,monospace";
+      c.fillText(lab, 3, yy-6);
+    }
+  }
+  // last price tag, the pink label from the reference terminal
+  const last = data[data.length-1], ly = y(last.c);
+  c.fillStyle = css("--magenta"); c.fillRect(plotW+2, ly-8, padR-8, 16);
+  c.fillStyle = "#0a0710"; c.font = "bold 10px ui-monospace,monospace"; c.textBaseline="middle";
+  c.fillText(last.c.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}), plotW+7, ly);
+}
+
+function drawEquity(curve, start){
+  const {c,w,h} = ctxFor("equityChart");
+  if(curve.length<2) return;
+  let hi = Math.max(...curve, start), lo = Math.min(...curve, start);
+  const pad = (hi-lo)*0.08 || 1; hi+=pad; lo-=pad;
+  const x = i => i/(curve.length-1)*w, y = v => h - (v-lo)/(hi-lo)*h;
+  // baseline = starting capital: above it you are up, below it you are down
+  const by = y(start);
+  c.save(); c.setLineDash([3,4]); c.strokeStyle = css("--faint");
+  c.beginPath(); c.moveTo(0,by); c.lineTo(w,by); c.stroke(); c.restore();
+  const upNow = curve[curve.length-1] >= start;
+  const col = upNow ? css("--cyan") : css("--red");
+  const g = c.createLinearGradient(0,0,0,h);
+  g.addColorStop(0, upNow ? "rgba(60,233,233,.34)" : "rgba(255,78,100,.30)");
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  c.beginPath(); c.moveTo(0, y(curve[0]));
+  curve.forEach((v,i)=>c.lineTo(x(i), y(v)));
+  c.lineTo(w, h); c.lineTo(0, h); c.closePath(); c.fillStyle = g; c.fill();
+  c.beginPath(); c.moveTo(0, y(curve[0]));
+  curve.forEach((v,i)=>c.lineTo(x(i), y(v)));
+  c.strokeStyle = col; c.lineWidth = 1.6; c.shadowColor = col; c.shadowBlur = 8; c.stroke();
+  c.shadowBlur = 0;
+}
+
+function drawStreak(trades){
+  const {c,w,h} = ctxFor("streakChart");
+  const d = trades.slice(0,26).reverse();
+  if(!d.length) return;
+  const peak = Math.max(...d.map(t=>Math.abs(t.net)), 1e-9);
+  const bw = w/Math.max(d.length,1);
+  d.forEach((t,i)=>{
+    const mag = Math.abs(t.net)/peak * (h*0.46);
+    c.fillStyle = t.net>=0 ? css("--green") : css("--red");
+    c.globalAlpha = .85;
+    if(t.net>=0) c.fillRect(i*bw+1, h/2-mag, bw-2, mag);
+    else c.fillRect(i*bw+1, h/2, bw-2, mag);
+  });
+  c.globalAlpha=1; c.strokeStyle = "rgba(122,120,152,.45)";
+  c.beginPath(); c.moveTo(0,h/2); c.lineTo(w,h/2); c.stroke();
+}
+
+function renderSignals(s){
+  const map = {LONG:["▲ LONG", css("--green")], SHORT:["▼ SHORT", css("--red")], FLAT:["● flat", css("--faint")]};
+  $("sigList").innerHTML = s.signals.map(g=>{
+    const [lab,col] = map[g.direction] || map.FLAT;
+    return `<div class="sig">
+      <b style="letter-spacing:.1em">${g.name.toUpperCase()}</b>
+      <span style="color:${col}">${lab}</span>
+      <div class="meter"><i style="width:${(g.confidence*100).toFixed(0)}%;background:${col};box-shadow:0 0 8px ${col}"></i></div>
+      <span class="muted num">w ${g.weight.toFixed(2)}</span>
+      <span></span><span class="why" style="grid-column:2/5">${g.reason||""}</span>
+    </div>`;
+  }).join("") || '<span class="muted">warming up indicators…</span>';
+
+  const e = s.ensemble;
+  if(e){
+    const [lab,col] = map[e.direction] || map.FLAT;
+    $("ensDir").innerHTML = `<span style="color:${col}">${lab}</span>`;
+    $("ensScore").textContent = `score ${e.score>=0?"+":""}${e.score.toFixed(3)} · agree ${(e.agreement*100).toFixed(0)}%`;
+    $("ensReason").textContent = e.reason;
+  }
+  $("haltBox").innerHTML = s.halted ? `<div class="halt">⛔ TRADING HALTED — ${s.halt_reason}</div>` : "";
+}
+
+function renderBook(b){
+  if(!b){ $("bookBody").innerHTML = '<span class="muted">no order book on this feed</span>'; return; }
+  const peak = Math.max(...b.asks.map(l=>l.s), ...b.bids.map(l=>l.s), 1e-9);
+  const row = (l,col) => `<div class="depth">
+      <span style="color:${col}">${l.p.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+      <div class="bar" style="width:${(l.s/peak*100).toFixed(0)}%;background:${col};opacity:.55"></div>
+      <span class="muted num">${l.s.toFixed(2)}</span></div>`;
+  const imbCol = b.imbalance>=0 ? css("--green") : css("--red");
+  $("bookBody").innerHTML =
+    b.asks.slice(0,6).reverse().map(l=>row(l,css("--red"))).join("") +
+    `<div class="row" style="border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:4px 0;margin:3px 0">
+       <span>spread ${b.spread.toFixed(2)}</span>
+       <b style="color:${imbCol}">imbalance ${b.imbalance>=0?"+":""}${b.imbalance.toFixed(3)}</b></div>` +
+    b.bids.slice(0,6).map(l=>row(l,css("--green"))).join("");
+}
+
+function renderTrades(t){
+  $("tradeRows").innerHTML = t.map(x=>`<tr>
+    <td class="${x.side==='LONG'?'up':'down'}">${x.side}</td>
+    <td class="muted">${x.reason}</td>
+    <td class="num muted">${x.entry.toFixed(2)}</td>
+    <td class="num muted">${x.exit.toFixed(2)}</td>
+    <td class="num ${cls(x.net)}">${x.net>=0?"+":""}${x.net.toFixed(2)}</td>
+    <td class="num ${cls(x.net)}">${pct(x.ret)}</td>
+    <td class="num muted">${x.bars}</td></tr>`).join("")
+    || '<tr><td colspan="7" class="muted">no closed trades yet</td></tr>';
+}
+
+function renderLog(log){
+  $("logBody").innerHTML = log.map(e=>`<div class="logline">
+      <span class="muted">${e.time}</span>
+      <span class="muted">#${e.bar}</span>
+      <span class="k-${e.kind}">${e.kind}</span>
+      <span class="msg">${e.message.replace(/[<>&]/g, ch=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[ch]))}</span>
+    </div>`).join("");
+}
+
+function render(s){
+  $("symbol").textContent = s.symbol;
+  $("venue").textContent = s.venue;
+  const badge = $("modeBadge");
+  badge.textContent = s.mode;
+  badge.className = "badge " + (s.mode === "LIVE" ? "live" : "paper");
+  $("price").textContent = money(s.price);
+  $("clock").textContent = s.clock;
+  $("barTop").textContent = s.bar.toLocaleString();
+  $("tradesTop").textContent = s.trades_count;
+  $("winTop").textContent = (s.win_rate*100).toFixed(1)+"%";
+  $("equityTop").textContent = money(s.equity);
+  $("retTop").textContent = pct(s.total_return);
+  $("retTop").className = cls(s.total_return);
+  $("chartTitle").textContent = `${s.symbol} · live`;
+
+  $("equity").textContent = money(s.equity);
+  $("equity").className = "big " + cls(s.total_return);
+  $("ret").textContent = pct(s.total_return) + " since start";
+  $("ret").className = cls(s.total_return);
+  $("cash").textContent = money(s.cash);
+  $("realised").textContent = money(s.realized_pnl);
+  $("realised").className = cls(s.realized_pnl);
+  $("fees").textContent = "-" + money(s.fees_paid).replace("$","$");
+  $("fees").className = "down";
+  $("peak").textContent = money(s.peak_equity);
+  $("dd").textContent = (s.drawdown*100).toFixed(2)+"%";
+  $("dd").className = s.drawdown > 0.05 ? "down" : "flat";
+
+  const p = s.position;
+  $("position").innerHTML = p ? `
+    <div class="row"><b class="${p.side==='LONG'?'up':'down'}">${p.side==='LONG'?'▲ LONG':'▼ SHORT'} ${p.qty.toFixed(6)}</b></div>
+    <div class="row"><span>entry</span><b>${p.entry.toFixed(2)}</b></div>
+    <div class="row"><span>unrealised</span><b class="${cls(p.unrealized)}">${p.unrealized>=0?"+":""}${p.unrealized.toFixed(2)} (${pct(p.unrealized_pct)})</b></div>
+    <div class="row"><span>stop</span><b class="down">${p.stop.toFixed(2)}</b></div>
+    <div class="row"><span>target</span><b class="up">${p.target.toFixed(2)}</b></div>
+    <div class="row"><span>held</span><b>${p.bars_held} bars</b></div>`
+    : '<div class="row"><b class="flat">● FLAT</b><span class="muted">waiting for setup</span></div>';
+
+  const st = s.win_streak || -s.loss_streak;
+  $("streak").textContent = "×" + Math.abs(st);
+  $("streak").className = "huge " + (st>0?"up":st<0?"down":"flat");
+  $("streakLabel").textContent = st>0 ? "consecutive wins" : st<0 ? "consecutive losses" : "no active streak";
+  $("winRate").textContent = (s.win_rate*100).toFixed(1)+"%";
+  $("pf").textContent = s.profit_factor===null ? "∞" : s.profit_factor.toFixed(2);
+  $("exp").textContent = money(s.expectancy);
+  $("exp").className = cls(s.expectancy);
+  $("bestRun").textContent = s.best_win_streak;
+  $("worstRun").textContent = s.worst_loss_streak;
+
+  if(s.candles.length){
+    const k = s.candles[s.candles.length-1], ch = (k.c-k.o)/k.o;
+    $("ohlc").textContent = `O ${k.o.toFixed(2)}  H ${k.h.toFixed(2)}  L ${k.l.toFixed(2)}  C ${k.c.toFixed(2)}`;
+    $("chg").textContent = pct(ch); $("chg").className = cls(ch);
+  }
+  $("eqFrom").textContent = money(s.starting_cash) + " start";
+  $("eqTo").textContent = money(s.equity) + "  " + pct(s.total_return);
+  $("eqTo").className = cls(s.total_return);
+
+  drawCandles(s.candles, s.position);
+  drawEquity(s.equity_curve, s.starting_cash);
+  drawStreak(s.trades);
+  renderSignals(s); renderBook(s.book); renderTrades(s.trades); renderLog(s.log);
+
+  $("disclaimer").textContent = s.mode === "LIVE"
+    ? "LIVE MODE — real orders. You are responsible for every one of them."
+    : "PAPER MODE — simulated fills, no real money at risk. Past simulated results are not a forecast.";
+}
+
+let failures = 0;
+async function poll(){
+  try{
+    const r = await fetch("/api/state", {cache:"no-store"});
+    if(!r.ok) throw new Error(r.status);
+    render(await r.json());
+    failures = 0;
+  }catch(e){
+    // the engine may still be starting, or has stopped; degrade quietly
+    if(++failures === 3) $("clock").textContent = "no feed";
+  }
+}
+poll(); setInterval(poll, 500);
+window.addEventListener("resize", poll);
+</script>
+</body>
+</html>
