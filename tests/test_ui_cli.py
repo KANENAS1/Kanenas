@@ -76,8 +76,8 @@ class TestTerminalDashboard(unittest.TestCase):
     def setUp(self):
         R.enable_color(False)
 
-    def test_frame_renders_all_panels(self):
-        frame = Dashboard(warm_engine()).frame(width=120)
+    def test_frame_renders_all_panels_when_there_is_room(self):
+        frame = Dashboard(warm_engine()).frame(width=120, height=60)
         for heading in ("WALLET", "SIGNAL MATRIX", "ORDER BOOK", "EQUITY",
                         "RECENT TRADES", "EXECUTION LOG"):
             self.assertIn(heading, frame)
@@ -90,6 +90,56 @@ class TestTerminalDashboard(unittest.TestCase):
             frame = Dashboard(warm_engine(bars=300)).frame(width=width)
             longest = max(R.visible_len(l) for l in frame.splitlines())
             self.assertLessEqual(longest, width + 2)
+
+    def test_frame_never_exceeds_the_window_height(self):
+        """Regression: the frame ignored terminal height entirely.
+
+        A frame taller than the window scrolls on every redraw, so the display
+        marches down the screen instead of updating in place - it looks like
+        the dashboard has gone haywire. It was a fixed 54 lines, which overflows
+        a default PowerShell window by 24.
+        """
+        d = Dashboard(warm_engine(bars=400))
+        for height in (60, 50, 40, 34, 30, 24, 20, 15, 12, 10):
+            lines = d.frame(width=120, height=height).splitlines()
+            self.assertLessEqual(len(lines), height - 1,
+                                 f"frame overflows a {height}-row window")
+
+    def test_dense_layouts_keep_position_state_and_the_log(self):
+        """When panels must go, these two survive longest.
+
+        Position state answers "what am I holding"; the log answers "what just
+        happened". Equity curve and trade history are reconstructable after the
+        fact, so they are dropped first.
+        """
+        d = Dashboard(warm_engine(bars=400))
+        for height in (40, 30, 24):
+            frame = d.frame(width=120, height=height)
+            self.assertIn("WALLET", frame, f"wallet dropped at {height} rows")
+            self.assertIn("EXECUTION LOG", frame, f"log dropped at {height} rows")
+
+    def test_panels_drop_in_priority_order_as_the_window_shrinks(self):
+        d = Dashboard(warm_engine(bars=400))
+        roomy = d.frame(width=120, height=60)
+        tight = d.frame(width=120, height=26)
+        self.assertIn("RECENT TRADES", roomy)
+        self.assertNotIn("RECENT TRADES", tight)   # dropped before the log
+        self.assertIn("EXECUTION LOG", tight)
+
+    def test_draw_emits_no_trailing_newline_on_a_tty(self):
+        """A newline on the final row scrolls the window once per frame."""
+        import io
+
+        class FakeTTY(io.StringIO):
+            def isatty(self):
+                return True
+
+        buf = FakeTTY()
+        Dashboard(warm_engine(bars=200), stream=buf).draw()
+        out = buf.getvalue()
+        self.assertFalse(out.endswith("\n"))
+        self.assertTrue(out.startswith("\x1b[H"))
+        self.assertTrue(out.endswith("\x1b[0J"))   # clears any taller leftover
 
     def test_draw_writes_to_a_non_tty_stream(self):
         buf = io.StringIO()

@@ -33,6 +33,14 @@ class Dashboard:
         self.started = time.time()
         self.frames = 0
         self._alt_screen = False
+        # density knobs, re-tuned per frame to fit the window (see frame())
+        self._chart_h = 12
+        self._eq_h = 7
+        self._log_rows = 8
+        self._trade_rows = 7
+        self._book_depth = 5
+        self._show_reasons = True
+        self._compact_wallet = False
 
     # ------------------------------------------------------------- lifecycle
 
@@ -94,14 +102,20 @@ class Dashboard:
         body = [
             R.c(f"${eq:,.2f}", R.pnl_colour(ret), True),
             f"{R.c(f'{ret:+.2%}', R.pnl_colour(ret))} {R.c('since start', R.DARK)}",
-            "",
-            f"{R.c('cash     ', R.DARK)}${p.cash:,.2f}",
-            f"{R.c('realised ', R.DARK)}{R.c(f'{p.realized_pnl:+,.2f}', R.pnl_colour(p.realized_pnl))}",
-            f"{R.c('fees     ', R.DARK)}{R.c(f'-{p.fees_paid:,.2f}', R.RED)}",
-            f"{R.c('peak     ', R.DARK)}${p.peak_equity:,.2f}",
-            f"{R.c('drawdown ', R.DARK)}{R.c(f'{p.drawdown:.2%}', R.RED if p.drawdown > 0.05 else R.GREY)}",
-            "",
         ]
+        if not self._compact_wallet:
+            body += [
+                "",
+                f"{R.c('cash     ', R.DARK)}${p.cash:,.2f}",
+                f"{R.c('realised ', R.DARK)}{R.c(f'{p.realized_pnl:+,.2f}', R.pnl_colour(p.realized_pnl))}",
+                f"{R.c('fees     ', R.DARK)}{R.c(f'-{p.fees_paid:,.2f}', R.RED)}",
+                f"{R.c('peak     ', R.DARK)}${p.peak_equity:,.2f}",
+                f"{R.c('drawdown ', R.DARK)}{R.c(f'{p.drawdown:.2%}', R.RED if p.drawdown > 0.05 else R.GREY)}",
+            ]
+        else:
+            body.append(f"{R.c('realised ', R.DARK)}{R.c(f'{p.realized_pnl:+,.2f}', R.pnl_colour(p.realized_pnl))}"
+                        f"  {R.c('dd ', R.DARK)}{R.c(f'{p.drawdown:.2%}', R.GREY)}")
+        body.append("")
         if pos.is_open:
             u = pos.unrealized(price)
             arrow = "▲ LONG" if pos.qty > 0 else "▼ SHORT"
@@ -121,7 +135,7 @@ class Dashboard:
         e = self.engine
         inner = width - 2
         candles = list(e.ind.candles)
-        height = 12
+        height = self._chart_h
         axis_w = 11
         chart_w = max(10, inner - axis_w - 12)
         rows = R.candle_chart(candles, chart_w, height, marker_price=e.state.price)
@@ -173,7 +187,8 @@ class Dashboard:
                 gauge = R.bar_gauge(sig.confidence, 10, col)
                 name = R.c(R.pad(sig.source.upper(), 9), R.WHITE)
                 body.append(f"{name}{R.c(tag, col)} {gauge} {R.c(f'w{w:.2f}', R.DARK)}")
-                body.append("  " + R.c(R.truncate(sig.reason, width - 6), R.DARK))
+                if self._show_reasons:
+                    body.append("  " + R.c(R.truncate(sig.reason, width - 6), R.DARK))
             arrow = ("▲ LONG" if d.direction is Direction.LONG else
                      "▼ SHORT" if d.direction is Direction.SHORT else "● FLAT")
             col = R.GREEN if d.direction is Direction.LONG else (R.RED if d.direction is Direction.SHORT else R.GREY)
@@ -190,7 +205,7 @@ class Dashboard:
         if book is None:
             body.append(R.c("no order book on this feed", R.DARK))
         else:
-            depth = 5
+            depth = self._book_depth
             peak = max([l.size for l in book.asks[:depth]] + [l.size for l in book.bids[:depth]] + [1e-9])
             for lvl in reversed(book.asks[:depth]):
                 bar = R.bar_gauge(lvl.size / peak, 10, R.RED)
@@ -207,7 +222,7 @@ class Dashboard:
         p = self.engine.portfolio
         curve = [pt.equity for pt in p.equity_curve]
         inner = width - 2
-        body = R.area_chart(curve, inner, 7, R.CYAN, baseline=p.starting_cash)
+        body = R.area_chart(curve, inner, self._eq_h, R.CYAN, baseline=p.starting_cash)
         ret = p.total_return
         body.append(R.c(f"{p.starting_cash:,.0f}", R.DARK) + " → "
                     + R.c(f"{curve[-1]:,.2f}" if curve else "-", R.pnl_colour(ret), True)
@@ -217,7 +232,7 @@ class Dashboard:
     def _trades(self, width: int) -> List[str]:
         p = self.engine.portfolio
         body = [R.c(f"{'side':<5}{'exit':<6}{'net':>10}{'ret':>9}{'bars':>6}", R.DARK)]
-        for t in p.trades[-7:][::-1]:
+        for t in p.trades[-self._trade_rows:][::-1]:
             side = "LONG" if t.direction is Direction.LONG else "SHORT"
             col = R.pnl_colour(t.net_pnl)
             body.append(f"{R.c(f'{side:<5}', R.GREEN if side == 'LONG' else R.RED)}"
@@ -245,33 +260,75 @@ class Dashboard:
 
     # ----------------------------------------------------------------- frame
 
-    def frame(self, width: Optional[int] = None) -> str:
-        w, _ = R.term_size()
-        width = width or w
-        width = max(96, min(width, 200))
+    #: Progressively denser layouts, tried in order until one fits the window.
+    #: Sections are *dropped* rather than the frame being cropped: cropping cuts
+    #: from the bottom, which would silently remove the execution log - the pane
+    #: you most want when something goes wrong.
+    #: (chart, equity, log rows, trade rows, book depth, reasons, compact wallet, sections)
+    _DENSITIES = (
+        (12, 7, 8, 7, 5, True,  False, ("top", "mid", "low", "log")),
+        (10, 6, 6, 6, 5, True,  False, ("top", "mid", "low", "log")),
+        (9,  5, 4, 5, 4, True,  False, ("top", "mid", "low", "log")),
+        (8,  4, 3, 4, 4, False, False, ("top", "mid", "low", "log")),
+        (8,  4, 4, 4, 4, True,  False, ("top", "mid", "log")),
+        (7,  3, 3, 3, 3, False, False, ("top", "mid", "log")),
+        (7,  3, 3, 3, 3, False, True,  ("top", "sig", "log")),
+        (6,  3, 2, 3, 3, False, True,  ("top", "log")),
+        (5,  3, 1, 2, 2, False, True,  ("top", "log")),
+        (4,  3, 1, 2, 2, False, True,  ("top",)),
+    )
 
-        left_w = 30
-        right_w = 30
-        mid_w = width - left_w - right_w - 2
-
-        top = R.hjoin([self._wallet(left_w), self._chart(mid_w), self._streak(right_w)])
-        sig_w = (width - 1) // 2
-        book_w = width - sig_w - 1
-        mid = R.hjoin([self._signals(sig_w), self._book(book_w)])
-        eq_w = (width - 1) // 2
-        tr_w = width - eq_w - 1
-        low = R.hjoin([self._equity(eq_w), self._trades(tr_w)])
-        log = self._log(width, 8)
-
+    def _compose(self, width: int, sections: tuple) -> list:
         out = [self._header(width), ""]
-        out += top + mid + low + log
+        if "top" in sections:
+            left_w = right_w = 30
+            out += R.hjoin([self._wallet(left_w), self._chart(width - left_w - right_w - 2),
+                            self._streak(right_w)])
+        sig_w = (width - 1) // 2
+        if "mid" in sections:
+            out += R.hjoin([self._signals(sig_w), self._book(width - sig_w - 1)])
+        elif "sig" in sections:
+            out += self._signals(width)
+        if "low" in sections:
+            eq_w = (width - 1) // 2
+            out += R.hjoin([self._equity(eq_w), self._trades(width - eq_w - 1)])
+        if "log" in sections:
+            out += self._log(width, self._log_rows)
+        return out
+
+    def frame(self, width: Optional[int] = None, height: Optional[int] = None) -> str:
+        """Render one frame sized to the window.
+
+        The frame must fit the terminal's *height*, not just its width. A frame
+        taller than the window scrolls on every redraw, so the display marches
+        down the screen instead of updating in place - which looks like the
+        dashboard has gone haywire. So try progressively denser layouts until
+        one fits, and crop as a last resort for a genuinely tiny window.
+        """
+        tw, th = R.term_size()
+        width = max(96, min(width or tw, 200))
+        # one line spare: writing to the last cell of the last row scrolls
+        budget = max(8, (height or th) - 1)
+
+        out = []
+        for (chart_h, eq_h, log_rows, trade_rows, depth,
+             reasons, compact, sections) in self._DENSITIES:
+            (self._chart_h, self._eq_h, self._log_rows, self._trade_rows,
+             self._book_depth, self._show_reasons, self._compact_wallet) = (
+                chart_h, eq_h, log_rows, trade_rows, depth, reasons, compact)
+            out = self._compose(width, sections)
+            if len(out) <= budget:
+                break
         self.frames += 1
-        return "\n".join(out)
+        return "\n".join(out[:budget])
 
     def draw(self) -> None:
         text = self.frame()
         if self.out.isatty():
-            self.out.write("\x1b[H\x1b[2J" + text + "\n")
+            # Home, draw, then clear whatever the previous (taller) frame left
+            # below. No trailing newline: printing one on the final row scrolls
+            # the window by a line every single frame.
+            self.out.write("\x1b[H" + text + "\x1b[0J")
         else:
             self.out.write(text + "\n")
         self.out.flush()
