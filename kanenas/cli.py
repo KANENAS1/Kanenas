@@ -128,13 +128,20 @@ def cmd_run(args) -> int:
         if not args.dashboard:
             print("(terminal dashboard disabled with --no-dashboard; the web view is live)")
 
+    def make_feed(sym: str, iv: str):
+        from .data.rest import open_live_feed
+        return open_live_feed(sym, iv, venues=[args.venue] if args.venue else None)
+
     runner = LiveRunner(
         engine, feed,
         RunnerConfig(speed=args.speed, max_bars=args.bars, render=args.dashboard,
                      mode=mode, venue=venue,
                      bar_seconds=getattr(feed, "bar_seconds", 0.0) if not args.sim else 0.0),
         web=web,
+        feed_factory=None if args.sim or args.csv else make_feed,
     )
+    if web is not None:
+        web.runner = runner
     try:
         runner.run()
     finally:
@@ -279,9 +286,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     def common(sp):
         sp.add_argument("--symbol", default="BTC",
-                        help="BTC resolves to each venue's own spelling (XBTUSD on Kraken, etc.)")
+                        help="BTC, ETH, XRP or SOL - resolved to each venue's own spelling "
+                             "(XBTUSD on Kraken, ETH-USDT on OKX). Any other value is passed "
+                             "through to the venue untouched.")
         sp.add_argument("--cash", type=float, default=10_000.0, help="starting capital")
-        sp.add_argument("--interval", default="1m", choices=sorted(BARS_PER_YEAR))
+        sp.add_argument("--interval", default="1m", choices=sorted(BARS_PER_YEAR),
+                        help="bar size to trade. Shorter bars mean more trades and more "
+                             "fee drag; longer bars mean fewer, larger moves per trade.")
         sp.add_argument("--seed", type=int, default=7, help="simulator/broker seed (reproducibility)")
         sp.add_argument("--start-price", type=float, default=78_000.0)
         sp.add_argument("--csv", help="replay candles from a CSV file instead of live data")

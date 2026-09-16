@@ -130,6 +130,38 @@ class TradingEngine:
             self.state.push(LogEntry(self.state.candle.ts if self.state.candle else 0.0,
                                      self.state.bar, kind, note, self.state.price))
 
+    def switch_instrument(self, symbol: str, bars_per_year: float) -> None:
+        """Point the engine at a different market.
+
+        Indicators and per-strategy state are rebuilt from scratch, not carried
+        over: an ATR learned on Bitcoin is meaningless on Solana, and a stop
+        sized from it would be too. The account survives - cash and the closed
+        trade ledger continue, since it is one account trading a new
+        instrument - but the position must already be flat, because a position
+        in the old symbol cannot be managed by a feed for the new one.
+        """
+        if self.portfolio.position.is_open:
+            raise RuntimeError("flatten before switching instrument")
+        from .strategy.ensemble import default_ensemble
+
+        old = self.cfg.symbol
+        self.cfg.symbol = symbol
+        self.cfg.bars_per_year = bars_per_year
+        self.portfolio.symbol = symbol
+        self.ind = IndicatorSet(bars_per_year=bars_per_year)
+        self.ensemble = default_ensemble(
+            entry_threshold=self.ensemble.entry_threshold,
+            min_agreement=self.ensemble.min_agreement,
+            adaptive=self.ensemble.adaptive,
+        )
+        self._open_contributions = {}
+        self.state.decision = None
+        self.state.book = None
+        self.state.push(LogEntry(self.state.candle.ts if self.state.candle else 0.0,
+                                 self.state.bar, "INFO",
+                                 f"switched {old} -> {symbol}: indicators and strategy "
+                                 f"state rebuilt; account continues", self.state.price))
+
     def request_flatten(self) -> bool:
         """Ask to close any open position on the next bar.
 

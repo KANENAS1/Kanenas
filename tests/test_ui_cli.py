@@ -305,14 +305,25 @@ class TestCli(unittest.TestCase):
         self.assertEqual(args.symbol, "BTC")
         self.assertIsNone(args.venue)          # auto-failover across venues
 
-    def test_btc_resolves_to_each_venues_own_spelling(self):
-        from kanenas.data.rest import BTC_SYMBOL, VENUE_ORDER, resolve_symbol
+    def test_assets_resolve_to_each_venues_own_spelling(self):
+        from kanenas.data.rest import ASSETS, SYMBOLS, VENUE_ORDER, resolve_symbol
         self.assertEqual(resolve_symbol("binance", "BTC"), "BTCUSDT")
-        self.assertEqual(resolve_symbol("kraken", "BTC"), "XBTUSD")
+        self.assertEqual(resolve_symbol("kraken", "BTC"), "XBTUSD")   # Kraken says XBT
         self.assertEqual(resolve_symbol("coinbase", "btc"), "BTC-USD")
-        self.assertEqual(resolve_symbol("binance", "ETHUSDT"), "ETHUSDT")   # passthrough
-        for v in VENUE_ORDER:
-            self.assertIn(v, BTC_SYMBOL)
+        self.assertEqual(resolve_symbol("binance", "ETH"), "ETHUSDT")
+        self.assertEqual(resolve_symbol("okx", "SOL"), "SOL-USDT")
+        self.assertEqual(resolve_symbol("bitstamp", "XRP"), "xrpusd")
+        self.assertEqual(resolve_symbol("binance", "ADAUSDT"), "ADAUSDT")   # passthrough
+        for asset in ASSETS:
+            for v in VENUE_ORDER:
+                self.assertIn(v, SYMBOLS[asset], f"{asset} missing on {v}")
+
+    def test_aliases_people_actually_type(self):
+        from kanenas.data.rest import canonical_asset
+        for typed, expected in (("bitcoin", "BTC"), ("ethereum", "ETH"), ("ripple", "XRP"),
+                                ("solana", "SOL"), ("SOL-USD", "SOL"), ("xrpusdt", "XRP")):
+            self.assertEqual(canonical_asset(typed), expected)
+        self.assertIsNone(canonical_asset("ADAUSDT"))   # unknown: passed through
 
     def test_no_live_venue_refuses_rather_than_simulating(self):
         """Silently trading synthetic prices you believe are live is the worst

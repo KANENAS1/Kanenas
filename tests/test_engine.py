@@ -303,6 +303,64 @@ class TestOperatorControls(unittest.TestCase):
         self.assertFalse(eng.portfolio.position.is_open)
 
 
+class TestInstrumentSwitching(unittest.TestCase):
+    def warm(self, symbol="BTC"):
+        eng = TradingEngine(EngineConfig(symbol=symbol))
+        eng.prime([e.candle for e in MarketSimulator(SimulatorConfig(seed=4), bars=300).stream()])
+        return eng
+
+    def test_refuses_to_switch_while_holding(self):
+        """A position in the old symbol cannot be managed by the new feed."""
+        eng = self.warm()
+        for e in MarketSimulator(SimulatorConfig(seed=2024), bars=400).stream():
+            eng.process(e)
+            if eng.portfolio.position.is_open:
+                break
+        self.assertTrue(eng.portfolio.position.is_open)
+        with self.assertRaises(RuntimeError):
+            eng.switch_instrument("ETH", 525_600.0)
+
+    def test_switch_rebuilds_indicators(self):
+        """An ATR learned on Bitcoin is meaningless on Solana."""
+        eng = self.warm()
+        self.assertTrue(eng.ind.warm)
+        old_atr = eng.ind.atr.value
+        eng.switch_instrument("SOL", 105_120.0)
+        self.assertFalse(eng.ind.warm)
+        self.assertEqual(len(eng.ind.candles), 0)
+        self.assertIsNone(eng.ind.atr.value)
+        self.assertGreater(old_atr, 0)
+
+    def test_switch_keeps_the_account(self):
+        eng = self.warm()
+        for e in MarketSimulator(SimulatorConfig(seed=2024), bars=500).stream():
+            eng.process(e)
+        if eng.portfolio.position.is_open:
+            eng.request_flatten()
+            eng.process(next(iter(MarketSimulator(SimulatorConfig(seed=9), bars=1).stream())))
+        cash, ledger = eng.portfolio.cash, len(eng.portfolio.trades)
+        eng.switch_instrument("XRP", 35_040.0)
+        self.assertAlmostEqual(eng.portfolio.cash, cash)
+        self.assertEqual(len(eng.portfolio.trades), ledger)
+        self.assertEqual(eng.portfolio.symbol, "XRP")
+        self.assertEqual(eng.cfg.symbol, "XRP")
+
+    def test_switch_updates_the_annualisation_basis(self):
+        """1m and 1h bars cannot share a bars-per-year figure."""
+        eng = self.warm()
+        eng.switch_instrument("ETH", 8_760.0)
+        self.assertEqual(eng.cfg.bars_per_year, 8_760.0)
+        self.assertEqual(eng.ind.vol.bars_per_year, 8_760.0)
+
+    def test_strategy_state_does_not_leak_across_instruments(self):
+        eng = self.warm()
+        before = eng.ensemble
+        eng.switch_instrument("ETH", 525_600.0)
+        self.assertIsNot(eng.ensemble, before)
+        for stats in eng.ensemble.snapshot().values():
+            self.assertEqual(stats["trades"], 0)
+
+
 class TestReporting(unittest.TestCase):
     def test_report_fields_are_consistent(self):
         eng, rep = run_backtest(MarketSimulator(SimulatorConfig(seed=17), bars=2_000).stream(),

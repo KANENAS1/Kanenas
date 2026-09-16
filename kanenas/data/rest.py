@@ -212,33 +212,62 @@ VENUES = {
                        {"1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D"}),
 }
 
-#: The canonical BTC spot pair on each venue. Venues disagree on spelling
-#: (Kraken still calls Bitcoin XBT), so "BTC" is resolved per venue rather than
-#: making the user look it up.
-BTC_SYMBOL = {
-    "binance": "BTCUSDT",
-    "coinbase": "BTC-USD",
-    "kraken": "XBTUSD",
-    "bitstamp": "btcusd",
-    "okx": "BTC-USDT",
-    "bybit": "BTCUSDT",
+#: Spot pairs per asset per venue. Venues disagree on spelling - Kraken still
+#: calls Bitcoin XBT and quotes in ZUSD, Binance quotes USDT, Coinbase USD - so
+#: an asset name is resolved per venue rather than making the user look it up.
+SYMBOLS = {
+    "BTC": {"binance": "BTCUSDT", "coinbase": "BTC-USD", "kraken": "XBTUSD",
+            "bitstamp": "btcusd", "okx": "BTC-USDT", "bybit": "BTCUSDT"},
+    "ETH": {"binance": "ETHUSDT", "coinbase": "ETH-USD", "kraken": "ETHUSD",
+            "bitstamp": "ethusd", "okx": "ETH-USDT", "bybit": "ETHUSDT"},
+    "XRP": {"binance": "XRPUSDT", "coinbase": "XRP-USD", "kraken": "XRPUSD",
+            "bitstamp": "xrpusd", "okx": "XRP-USDT", "bybit": "XRPUSDT"},
+    "SOL": {"binance": "SOLUSDT", "coinbase": "SOL-USD", "kraken": "SOLUSD",
+            "bitstamp": "solusd", "okx": "SOL-USDT", "bybit": "SOLUSDT"},
 }
 
-#: Tried in this order. Binance first for depth and rate limits; Coinbase and
-#: Kraken next as the most widely reachable; the rest cover regions where the
-#: first three are geo-blocked.
+#: Assets offered in the dashboard picker and accepted by --symbol.
+ASSETS = list(SYMBOLS)
+
+#: Aliases people actually type.
+_ALIASES = {
+    "BITCOIN": "BTC", "XBT": "BTC", "BTCUSD": "BTC", "BTC-USD": "BTC", "BTCUSDT": "BTC",
+    "ETHEREUM": "ETH", "ETHUSD": "ETH", "ETH-USD": "ETH", "ETHUSDT": "ETH",
+    "RIPPLE": "XRP", "XRPUSD": "XRP", "XRP-USD": "XRP", "XRPUSDT": "XRP",
+    "SOLANA": "SOL", "SOLUSD": "SOL", "SOL-USD": "SOL", "SOLUSDT": "SOL",
+}
+
+#: Tradeable intervals, coarsest behaviour differences noted in the CLI help.
+INTERVALS = ["1m", "5m", "15m", "1h", "4h", "1d"]
+
+
+def canonical_asset(symbol: Optional[str]) -> Optional[str]:
+    """Map a user-typed name to an asset key, or None if it is venue-specific."""
+    if not symbol:
+        return "BTC"
+    key = symbol.strip().upper()
+    if key in SYMBOLS:
+        return key
+    return _ALIASES.get(key)
+
+
 VENUE_ORDER = ["binance", "coinbase", "kraken", "bitstamp", "okx", "bybit"]
 
 
 def resolve_symbol(venue: str, symbol: Optional[str] = None) -> str:
-    """Map a friendly name to the venue's own spelling.
+    """Map a friendly asset name to the venue's own spelling.
 
-    ``"BTC"`` (in any casing) becomes BTCUSDT on Binance and XBTUSD on Kraken.
-    Anything else is passed through untouched, so an explicit pair still works.
+    ``"ETH"`` becomes ETHUSDT on Binance and ETH-USD on Coinbase. Anything not
+    recognised as one of the supported assets is passed through untouched, so
+    an explicit venue pair still works.
     """
-    if symbol and symbol.strip().upper() not in ("BTC", "BTC-USD", "BTCUSD", "BITCOIN"):
-        return symbol
-    return BTC_SYMBOL[venue]
+    asset = canonical_asset(symbol)
+    if asset is None:
+        return symbol            # an explicit venue-specific pair
+    try:
+        return SYMBOLS[asset][venue]
+    except KeyError:
+        raise ValueError(f"{venue} has no listing for {asset}") from None
 
 
 def open_live_feed(
@@ -267,7 +296,12 @@ def open_live_feed(
         if interval not in VENUES[venue].interval_map:
             failures.append(f"{venue}: no {interval} interval")
             continue
-        feed = RestFeed(resolve_symbol(venue, symbol), venue, interval, with_book=with_book)
+        try:
+            pair = resolve_symbol(venue, symbol)
+        except ValueError as exc:
+            failures.append(f"{venue}: {exc}")
+            continue
+        feed = RestFeed(pair, venue, interval, with_book=with_book)
         try:
             candles = feed.fetch_history(limit=3)
             if not candles or candles[-1].close <= 0:

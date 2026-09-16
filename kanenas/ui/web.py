@@ -29,12 +29,14 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.types import Direction
+from ..data.rest import ASSETS, INTERVALS
 from ..engine import TradingEngine
 
 STATIC = Path(__file__).parent / "static"
 
 
-def serialise(engine: TradingEngine, mode: str, venue: str, started: float) -> dict:
+def serialise(engine: TradingEngine, mode: str, venue: str, started: float,
+              can_switch: bool = False, interval: str = "") -> dict:
     """Snapshot everything the page draws.  Read-only; never mutates engine state."""
     p = engine.portfolio
     st = engine.state
@@ -122,6 +124,10 @@ def serialise(engine: TradingEngine, mode: str, venue: str, started: float) -> d
         "paused": engine.paused,
         "feed_health": engine.feed_health,
         "feed_stale": engine.feed_stale,
+        "assets": ASSETS,
+        "intervals": INTERVALS,
+        "interval": interval,
+        "can_switch": can_switch,
         "risk_rejections": dict(engine.risk.rejections),
         "trades": [
             {"side": t.direction.name, "reason": t.reason.value, "net": t.net_pnl,
@@ -149,6 +155,8 @@ class DashboardServer:
         self.started = time.time()
         #: minted per server; the page is the only place it is published
         self.token = secrets.token_urlsafe(18)
+        #: set by the CLI when a live runner can rebuild feeds
+        self.runner = None
         self._httpd: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
@@ -211,6 +219,21 @@ class DashboardServer:
                 elif action == "flatten":
                     message = ("Closing on the next bar." if engine.request_flatten()
                                else "Already flat - nothing to close.")
+                elif action == "switch":
+                    runner = server.runner
+                    if runner is None or runner.feed_factory is None:
+                        self._send(b'{"error":"switching needs a live feed"}',
+                                   "application/json", 409)
+                        return
+                    symbol = str(body.get("symbol", "")).upper()
+                    interval = str(body.get("interval", ""))
+                    if symbol not in ASSETS or interval not in INTERVALS:
+                        self._send(b'{"error":"unknown symbol or interval"}',
+                                   "application/json", 400)
+                        return
+                    runner.request_switch(symbol, interval)
+                    message = (f"Switching to {symbol} {interval}. Any open position is "
+                               f"closed first; indicators rebuild from history.")
                 elif action == "halt":
                     engine.halt("operator kill switch (dashboard)")
                     message = "Halted. Trading stopped; restart the bot to resume."
@@ -220,9 +243,8 @@ class DashboardServer:
 
                 self._send(json.dumps({
                     "ok": True, "action": action, "message": message,
-                    "paused": engine.paused,
-        "feed_health": engine.feed_health,
-        "feed_stale": engine.feed_stale, "halted": engine.risk.halted,
+                    "paused": engine.paused, "halted": engine.risk.halted,
+                    "feed_health": engine.feed_health,
                 }).encode(), "application/json")
 
             def do_GET(self) -> None:  # noqa: N802
@@ -232,7 +254,10 @@ class DashboardServer:
                     html = html.replace("__CONTROL_TOKEN__", server.token)
                     self._send(html.encode("utf-8"), "text/html; charset=utf-8")
                 elif path == "/api/state":
-                    payload = serialise(server.engine, server.mode, server.venue, server.started)
+                    payload = serialise(
+                        server.engine, server.mode, server.venue, server.started,
+                        can_switch=bool(getattr(server.runner, "feed_factory", None)),
+                        interval=getattr(getattr(server.runner, "feed", None), "interval", ""))
                     self._send(json.dumps(payload).encode(), "application/json")
                 elif path == "/api/health":
                     self._send(b'{"ok":true}', "application/json")

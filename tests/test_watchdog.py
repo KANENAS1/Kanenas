@@ -193,5 +193,50 @@ class TestRunnerWatchdog(unittest.TestCase):
         self.assertEqual(runner.bars, 20)      # 20 real bars, 5 heartbeats ignored
 
 
+class TestRunnerSwitching(unittest.TestCase):
+    class ShortFeed:
+        bar_seconds = 60.0
+
+        def __init__(self, symbol, events, interval="1m"):
+            self.symbol, self.events, self.interval = symbol, events, interval
+            self.name = f"fake:{symbol}:{interval}"
+
+        def stream(self):
+            yield from self.events
+
+        def fetch_history(self, n):
+            return [e.candle for e in self.events[:n]]
+
+        def mark_seen(self, ts):
+            pass
+
+    def test_runner_switches_instrument_and_keeps_going(self):
+        events = list(MarketSimulator(SimulatorConfig(seed=2024), bars=120).stream())
+        eng = TradingEngine(EngineConfig(symbol="BTC"))
+        built = []
+
+        def factory(symbol, interval):
+            built.append((symbol, interval))
+            return self.ShortFeed(symbol, events, interval)
+
+        runner = LiveRunner(eng, self.ShortFeed("BTC", events[:40]),
+                            RunnerConfig(speed=0, render=False, bar_seconds=60.0),
+                            feed_factory=factory)
+        original = runner._consume
+        calls = []
+
+        def consume(cfg, delay):
+            calls.append(1)
+            if len(calls) == 1:
+                runner.request_switch("ETH", "5m")
+            original(cfg, delay)
+
+        runner._consume = consume
+        runner.run()
+        self.assertEqual(built, [("ETH", "5m")])
+        self.assertEqual(eng.cfg.symbol, "ETH")
+        self.assertFalse(eng.portfolio.position.is_open)
+
+
 if __name__ == "__main__":
     unittest.main()

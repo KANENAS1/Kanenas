@@ -147,6 +147,37 @@ of attributed P&L becomes a bounded multiplier on each base weight, so a model
 that stops working is quietly demoted instead of dragging the book down. The
 bounds matter: unbounded adaptation is overfitting with extra steps.
 
+## Markets and timeframes
+
+Four assets, six venues, six bar sizes — pick from the dashboard or the command line.
+
+```bash
+python3 -m kanenas run --symbol ETH --interval 15m
+python3 -m kanenas run --symbol SOL --interval 1h --venue kraken
+```
+
+| | binance | coinbase | kraken | bitstamp | okx | bybit |
+|---|---|---|---|---|---|---|
+| **BTC** | BTCUSDT | BTC-USD | XBTUSD | btcusd | BTC-USDT | BTCUSDT |
+| **ETH** | ETHUSDT | ETH-USD | ETHUSD | ethusd | ETH-USDT | ETHUSDT |
+| **XRP** | XRPUSDT | XRP-USD | XRPUSD | xrpusd | XRP-USDT | XRPUSDT |
+| **SOL** | SOLUSDT | SOL-USD | SOLUSD | solusd | SOL-USDT | SOLUSDT |
+
+Venues disagree on spelling — Kraken still calls Bitcoin XBT — so you name the
+asset and it is resolved per venue. `bitcoin`, `ETH-USD` and `solana` all work.
+Anything unrecognised is passed straight through, so `--symbol ADAUSDT` still
+reaches Binance.
+
+Intervals: `1m 5m 15m 1h 4h 1d`. Shorter bars mean more trades and more fee
+drag; the cost gate in `risk/` gets stricter as ATR shrinks relative to the
+spread, so on 1m the bot often declines setups it would take on 15m.
+
+**Switching mid-session** closes any open position first, then rebuilds every
+indicator and all per-strategy state from the new market's history. Nothing is
+carried across: an ATR learned on Bitcoin would size a nonsensical stop on
+Solana. The account continues — cash and the closed-trade ledger are one
+account trading a new instrument.
+
 ## Controls
 
 The browser dashboard is not just a display — it can stop the bot:
@@ -155,9 +186,30 @@ The browser dashboard is not just a display — it can stop the bot:
 |---|---|
 | **PAUSE** | No new entries. An open position **keeps its stop and target** — abandoning risk management on a live position is never what "pause" should mean. |
 | **FLATTEN** | Closes any open position on the next bar, and does not re-enter on that bar. Deferred rather than instant because closing mid-bar would have to invent a price, and every other exit here is priced from a real bar. |
+| **MARKET / BARS** | Switch asset or timeframe live. Flattens first, then rebuilds indicators from the new market's history. |
 | **HALT** | Kill switch: stops trading and flattens. Takes a deliberate second click, and only a restart undoes it. |
 
 `Ctrl+C` in the terminal also stops cleanly and flattens.
+
+### When the feed goes quiet
+
+Exits are only evaluated when a bar arrives, so a stalled feed used to leave an
+open position with an unenforced stop while the dashboard showed a last-known
+price that looked like a calm market. A watchdog now escalates on silence,
+measured in bar intervals so the same thresholds hold on 1m and 1h candles:
+
+| State | After | Effect |
+|---|---|---|
+| `LATE` | 1.5 intervals | logged, still trading |
+| `STALE` | 3 intervals | no new positions; badge turns amber |
+| `LOST` | 15 intervals | halts |
+
+It deliberately does **not** flatten on a dead feed — with no prices any exit
+would be an invented fill. What actually protects the position is that on
+reconnect the feed **replays every bar it missed**, so the stop is finally
+tested against the prices it should have fired at. Those replayed bars can
+close a position but never open one: entering at a price from half an hour ago
+is a fill that could not have happened.
 
 **These endpoints are guarded.** "Localhost with no auth" stops being safe the
 moment a request can *do* something — any page you happen to have open could
