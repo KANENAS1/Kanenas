@@ -20,7 +20,10 @@ class MeanReversion(Strategy):
     weight = 1.0
 
     def __init__(self, z_entry: float = 1.8, rsi_low: float = 32.0, rsi_high: float = 68.0,
-                 trend_veto_atr: float = 2.5) -> None:
+                 trend_veto_atr: float = 2.5, max_efficiency: float = 0.45) -> None:
+        #: the mirror of the trend gate - this strategy *wants* an inefficient,
+        #: thrashing market. Set to 1.0 to disable.
+        self.max_efficiency = max_efficiency
         self.z_entry = z_entry
         self.rsi_low = rsi_low
         self.rsi_high = rsi_high
@@ -40,6 +43,12 @@ class MeanReversion(Strategy):
         trend_dist = (price - ind.ema_trend.value) / atr
         if abs(trend_dist) > self.trend_veto_atr:
             return self.flat(f"trend veto {trend_dist:+.1f} ATR")
+        # second veto: an efficient market is going somewhere, so a stretch
+        # away from the mean is the move starting, not an overshoot to fade
+        if self.max_efficiency < 1.0:
+            er = ind.efficiency.value
+            if er is not None and er > self.max_efficiency:
+                return self.flat(f"efficient market {er:.2f} - not a fade")
 
         if z <= -self.z_entry and rsi <= self.rsi_low:
             conf = min(1.0, (abs(z) - self.z_entry) / 1.2 + 0.45)

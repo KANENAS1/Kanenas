@@ -17,13 +17,27 @@ class TrendFollow(Strategy):
     name = "trend"
     weight = 1.2
 
-    def __init__(self, min_separation_atr: float = 0.25) -> None:
+    def __init__(self, min_separation_atr: float = 0.25, min_efficiency: float = 0.30) -> None:
         self.min_separation_atr = min_separation_atr
+        #: below this Efficiency Ratio the market is thrashing, not trending.
+        #: Set to 0.0 to disable the gate.
+        self.min_efficiency = min_efficiency
 
     def evaluate(self, ctx: StrategyContext) -> Signal:
         ind = ctx.ind
         if not (ind.ema_fast.ready and ind.ema_slow.ready and ind.ema_trend.ready and ind.atr.ready):
             return self.flat("warming up")
+        # A stacked EMA set says price moved; it does not say price *travelled*
+        # there. In a whipsaw the stack aligns and re-aligns every few bars and
+        # each flip costs a round trip, which is what broke this strategy in
+        # the stress suite. The Efficiency Ratio is the missing question.
+        if self.min_efficiency > 0.0:
+            er = ind.efficiency.value
+            if er is None:
+                return self.flat("warming up")
+            if er < self.min_efficiency:
+                return self.flat(f"chop: efficiency {er:.2f} < {self.min_efficiency:.2f}")
+
         fast, slow, trend = ind.ema_fast.value, ind.ema_slow.value, ind.ema_trend.value
         atr = max(ind.atr.value, 1e-9)
         sep = (fast - slow) / atr

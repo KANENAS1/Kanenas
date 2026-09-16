@@ -43,6 +43,15 @@ DEFAULT_REGIMES: List[Regime] = [
 ]
 
 
+#: Fixed epoch for generated bars: 2024-01-01T00:00:00Z.
+#: Seeding the clock from ``time.time()`` instead made results depend on the
+#: wall-clock hour you ran them - the risk manager rolls its daily-loss window
+#: on UTC day boundaries, so where a run's bars fell relative to midnight
+#: changed which trades were halted. Same seed, different afternoon, different
+#: equity curve. A fixed origin makes a seed fully reproducible.
+DEFAULT_START_TS = 1_704_067_200.0
+
+
 @dataclass
 class SimulatorConfig:
     symbol: str = "BTC-USD"
@@ -58,6 +67,9 @@ class SimulatorConfig:
     book_depth: int = 8
     base_liquidity: float = 6.0   # size at top of book, in base units
     seed: Optional[int] = 7
+    #: epoch seconds of the first bar; pass ``time.time()`` for a live-looking
+    #: clock, at the cost of reproducibility
+    start_ts: float = DEFAULT_START_TS
     regimes: List[Regime] = field(default_factory=lambda: list(DEFAULT_REGIMES))
 
 
@@ -74,7 +86,7 @@ class MarketSimulator:
         self.price = self.cfg.start_price
         self.variance = self.cfg.base_vol ** 2
         self.regime_idx = 1  # start in CHOP
-        self.ts = time.time()
+        self.ts = self.cfg.start_ts
         self.bar_count = 0
 
     # ---------------------------------------------------------------- regime

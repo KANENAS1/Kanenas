@@ -101,20 +101,59 @@ class TestIndividualStrategies(unittest.TestCase):
         self.assertIs(sig.direction, Direction.SHORT)
 
     def test_momentum_needs_significant_drift(self):
+        """Feed cumulative history: the strategy reads the shared IndicatorSet."""
         s = RiskAdjustedMomentum(lookback=40, t_entry=1.1)
-        sig = None
+        prices, sig = [], None
         for px in [100 + i * 0.3 for i in range(80)]:
-            sig = s.evaluate(ctx_from([px]))
+            prices.append(px)
+            sig = s.evaluate(ctx_from(prices))
         self.assertIs(sig.direction, Direction.LONG)
 
     def test_momentum_flat_on_noise(self):
         import random
         rng = random.Random(3)
         s = RiskAdjustedMomentum(lookback=40, t_entry=2.5)
-        sig = None
+        prices, sig = [], None
         for _ in range(120):
-            sig = s.evaluate(ctx_from([100 + rng.gauss(0, 1)]))
+            prices.append(100 + rng.gauss(0, 1))
+            sig = s.evaluate(ctx_from(prices))
         self.assertIs(sig.direction, Direction.FLAT)
+
+    def test_momentum_stands_down_in_chop(self):
+        """Significant drift delivered by a thrashing path is not tradable."""
+        s = RiskAdjustedMomentum(lookback=40, t_entry=0.1, min_efficiency=0.30)
+        prices, sig = [], None
+        for i in range(120):                       # net upward, violently zig-zag
+            prices.append(100 + i * 0.3 + (0 if i % 2 == 0 else 9))
+            sig = s.evaluate(ctx_from(prices))
+        self.assertIs(sig.direction, Direction.FLAT)
+        self.assertIn("chop", sig.reason)
+
+    #: Rises 0.5/bar but delivers it by zig-zagging +4 on alternate bars, so the
+    #: EMA stack still aligns while the Efficiency Ratio collapses to ~0.13.
+    #: This is exactly the market that broke the strategy in the stress suite.
+    CHOPPY_UPTREND = [100 + i * 0.5 + (0 if i % 2 == 0 else 4) for i in range(220)]
+
+    def test_trend_stands_down_in_chop(self):
+        sig = TrendFollow(min_efficiency=0.30).evaluate(ctx_from(self.CHOPPY_UPTREND))
+        self.assertIs(sig.direction, Direction.FLAT)
+        self.assertIn("chop", sig.reason)
+
+    def test_the_gate_is_what_changed_the_answer(self):
+        """Same bars, gate off: the strategy goes long.
+
+        Paired with the test above this proves the Efficiency Ratio is the
+        deciding factor here, not some incidental change to the EMA logic.
+        """
+        self.assertIs(TrendFollow(min_efficiency=0.0).evaluate(
+            ctx_from(self.CHOPPY_UPTREND)).direction, Direction.LONG)
+
+    def test_mean_reversion_declines_to_fade_an_efficient_market(self):
+        s = MeanReversion(z_entry=0.5, rsi_low=60, rsi_high=40,
+                          trend_veto_atr=99.0, max_efficiency=0.45)
+        sig = s.evaluate(ctx_from([100 + i * 0.6 for i in range(220)]))
+        self.assertIs(sig.direction, Direction.FLAT)
+        self.assertIn("efficient", sig.reason)
 
 
 class TestEnsemble(unittest.TestCase):

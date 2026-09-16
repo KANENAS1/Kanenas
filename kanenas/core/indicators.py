@@ -357,6 +357,48 @@ class RealizedVol(Indicator):
         return self._value
 
 
+class EfficiencyRatio(Indicator):
+    """Kaufman Efficiency Ratio: net distance travelled / total path length.
+
+    ``|P_t - P_{t-n}| / sum(|P_i - P_{i-1}|)`` over the window, in [0, 1].
+
+    It answers the one question a trend follower most needs answered: did the
+    market *go somewhere*, or did it thrash?  A clean one-way move scores near
+    1.0; the same net move delivered by violent back-and-forth scores near 0.
+    Two markets with identical start and end prices - and identical returns,
+    volatility and EMA stacks - separate cleanly here, which is why ATR or
+    realised vol cannot substitute for it.
+
+    Trend and momentum want this high.  Mean reversion wants it low: chop is
+    the condition it is built for.
+    """
+
+    __slots__ = ("period", "_win", "_path")
+
+    def __init__(self, period: int = 20) -> None:
+        super().__init__()
+        if period < 2:
+            raise ValueError("period must be >= 2")
+        self.period = period
+        self._win: Deque[float] = deque(maxlen=period + 1)
+        self._path: Deque[float] = deque(maxlen=period)
+
+    def update(self, x: float) -> Optional[float]:
+        self._count += 1
+        if self._win:
+            self._path.append(abs(x - self._win[-1]))
+        self._win.append(x)
+        if len(self._path) < self.period:
+            return None
+        total = math.fsum(self._path)
+        if total <= 1e-12:
+            # a perfectly flat window has no direction to measure
+            self._value = 0.0
+            return self._value
+        self._value = abs(self._win[-1] - self._win[0]) / total
+        return self._value
+
+
 class IndicatorSet:
     """Every indicator the strategies need, updated once per bar.
 
@@ -374,6 +416,7 @@ class IndicatorSet:
         bb_period: int = 20,
         donchian: int = 20,
         vol_period: int = 30,
+        efficiency_period: int = 20,
         bars_per_year: float = 525600.0,
     ) -> None:
         self.ema_fast = EMA(fast)
@@ -385,6 +428,7 @@ class IndicatorSet:
         self.bb = Bollinger(bb_period)
         self.donchian = Donchian(donchian)
         self.vol = RealizedVol(vol_period, bars_per_year)
+        self.efficiency = EfficiencyRatio(efficiency_period)
         self.closes: Deque[float] = deque(maxlen=512)
         self.candles: Deque[Candle] = deque(maxlen=512)
         self.bars = 0
@@ -398,6 +442,7 @@ class IndicatorSet:
             and self.atr.ready
             and self.bb.ready
             and self.donchian.ready
+            and self.efficiency.ready
         )
 
     def update(self, c: Candle) -> None:
@@ -413,6 +458,7 @@ class IndicatorSet:
         self.bb.update(c.close)
         self.donchian.update_candle(c)
         self.vol.update(c.close)
+        self.efficiency.update(c.close)
 
     def atr_pct(self, price: float) -> float:
         if not self.atr.ready or price <= 0:

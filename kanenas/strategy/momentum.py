@@ -21,9 +21,13 @@ class RiskAdjustedMomentum(Strategy):
     name = "momo"
     weight = 1.0
 
-    def __init__(self, lookback: int = 40, t_entry: float = 1.1) -> None:
+    def __init__(self, lookback: int = 40, t_entry: float = 1.1,
+                 min_efficiency: float = 0.30) -> None:
         self.lookback = lookback
         self.t_entry = t_entry
+        #: drift can be statistically significant and still be delivered by a
+        #: path too noisy to trade. Set to 0.0 to disable the gate.
+        self.min_efficiency = min_efficiency
         self.rets: Deque[float] = deque(maxlen=lookback)
         self._prev: float | None = None
 
@@ -34,6 +38,12 @@ class RiskAdjustedMomentum(Strategy):
         self._prev = price
         if len(self.rets) < self.lookback:
             return self.flat("warming up")
+        if self.min_efficiency > 0.0:
+            er = ctx.ind.efficiency.value
+            if er is None:
+                return self.flat("warming up")
+            if er < self.min_efficiency:
+                return self.flat(f"chop: efficiency {er:.2f} < {self.min_efficiency:.2f}")
 
         n = len(self.rets)
         mean = math.fsum(self.rets) / n

@@ -9,7 +9,7 @@ dashboards. **Zero dependencies** — pure Python 3.9+ standard library.
 python3 -m kanenas run --speed 8 --open      # live paper session + dashboards
 python3 -m kanenas backtest --bars 5000      # full statistical report
 python3 -m kanenas stress                    # try to break the strategy
-python3 -m unittest discover -s tests        # 153 tests, ~3 seconds
+python3 -m unittest discover -s tests        # 161 tests, ~4 seconds
 ```
 
 ---
@@ -86,11 +86,11 @@ running five variants of one idea.
 
 | Strategy | Thesis | Fires when |
 |---|---|---|
-| `trend` | Crypto trends persist longer than a random walk allows | EMA 9/21/55 stacked, separation measured **in ATR** (a hairline cross is not a trend) |
-| `revert` | Inside a range, price overshoots and snaps back | Bollinger z-score ≥ 1.8 **and** RSI confirms — with a **hard veto** when a trend is in force |
+| `trend` | Crypto trends persist longer than a random walk allows | EMA 9/21/55 stacked, separation measured **in ATR** (a hairline cross is not a trend), and only when the market is *efficient* (below) |
+| `revert` | Inside a range, price overshoots and snaps back | Bollinger z-score ≥ 1.8 **and** RSI confirms — with a **hard veto** when a trend is in force, or when the market is *too* efficient to fade |
 | `breakout` | Volatility clusters; a quiet market that breaks its range keeps going | Price clears the Donchian channel by a fraction of ATR, boosted when band width is in a squeeze |
 | `flow` | At the shortest horizon, price moves toward the thinner side of the book | Smoothed order-book imbalance is *persistently* lopsided |
-| `momo` | The **Sharpe** of recent returns beats the raw return as a momentum estimate | t-statistic of drift over 40 bars exceeds 1.1 |
+| `momo` | The **Sharpe** of recent returns beats the raw return as a momentum estimate | t-statistic of drift over 40 bars exceeds 1.1, and the path was efficient |
 
 ### How the ensemble decides
 
@@ -166,28 +166,55 @@ ships a suite whose job is to *break* the strategy:
 
 ```
   scenario         median    worst     best    win%   maxDD  trades   verdict
-  Baseline          7.96%    4.18%   10.45%   72.0%   0.85%     206   survives
-  Random walk      -3.45%   -5.16%   -2.89%   31.3%   3.55%      70   expected (costs, no edge)
-  Whipsaw          -5.79%   -6.64%   -3.09%   30.6%   6.23%     114   BREAKS
-  High fees         0.00%   -0.41%    0.00%    0.0%   0.00%       0   stood down (costs > edge)
-  Thin book         0.09%   -1.41%    0.64%   80.0%   0.31%       5   survives
-  Flash crashes     1.19%  -16.25%   28.02%   52.8%  12.93%      92   survives
-  Brutal           -8.73%  -15.16%   -0.32%   37.8%   9.68%      24   BREAKS
+  Baseline          7.91%    4.48%   10.73%   73.9%   0.83%     192   survives
+  Random walk      -3.05%   -4.71%   -2.25%   29.7%   3.27%      64   expected (costs, no edge)
+  Whipsaw          -4.77%   -6.12%   -2.24%   29.7%   4.83%      90   bleeds slowly
+  High fees         0.00%    0.00%    0.00%    0.0%   0.00%       0   stood down (costs > edge)
+  Thin book         0.09%   -1.41%    0.63%   80.0%   0.31%       5   survives
+  Flash crashes    -1.60%  -11.46%   23.47%   51.7%  13.03%      63   bleeds slowly
+  Brutal           -9.18%  -14.20%    1.77%   31.5%  10.16%      18   BREAKS
 ```
 
 Read it honestly:
 
-- **Random walk −3.45% is the most important row in this repo.** Strip out drift
+- **Random walk −3.05% is the most important row in this repo.** Strip out drift
   and regime persistence and the bot loses roughly what it pays in costs —
   exactly right. A strategy that stays *profitable* on a driftless random walk is
   reading the future somewhere. This is the strongest evidence the engine isn't
   cheating.
-- **Whipsaw and Brutal break it.** Trend logic dies when regimes flip every few
-  bars. That is a real, named limitation, not a rough edge.
-- **Flash crashes: median +1.19% but worst −16.25%.** Gap risk is real. A stop is
-  a request, not a guarantee; price can open through it.
+- **Brutal still breaks it, and Whipsaw still bleeds.** Trend logic suffers when
+  regimes flip every few bars. The efficiency gate below cut that loss but did
+  not remove it. These are real, named limitations, not rough edges.
+- **Flash crashes: worst −11.46%.** Gap risk is real. A stop is a request, not a
+  guarantee; price can open through it.
 - **High fees: it stands down entirely.** Correct behaviour — flat beats bleeding
   to fees.
+
+### The efficiency gate
+
+`Whipsaw` used to read **−5.79% BREAKS**. A stacked EMA set says price *moved*;
+it does not say price *travelled* there. When regimes flip every few bars the
+stack aligns and re-aligns constantly and each flip costs a round trip.
+
+The missing question is Kaufman's **Efficiency Ratio** — net distance covered
+divided by total path length, in `[0, 1]`. Two markets with identical start and
+end prices, identical returns, identical volatility and identical EMA stacks
+separate cleanly here: a one-way move scores ~1.0, the same move delivered by
+thrashing scores ~0.1. Neither ATR nor realised vol can substitute for it.
+
+`trend` and `momo` now require it above 0.30. `revert` requires it *below* 0.45 —
+chop is the condition it is built for. Measured across 40 seeded markets per arm,
+same markets in both:
+
+| scenario | gate off | gate on |
+|---|---|---|
+| Whipsaw | −5.22% mean | **−4.26%** mean (+0.96pp, better at both tails) |
+| Flash crashes | 6.70% mean, p10 −14.01% | 6.73% mean, **p10 −11.41%** |
+| Baseline | 7.30% mean | 7.53% mean |
+
+Whipsaw improves, the crash tail tightens, baseline is unaffected. An earlier
+8-seed run appeared to show flash crashes getting much worse; at 40 seeds that
+was noise. Pass `--no-adaptive`-style zeroing (`min_efficiency=0.0`) to disable.
 
 ### The bug the stress suite found
 
@@ -228,7 +255,7 @@ higher timeframe (`--interval 1h`), where ATR is a larger share of price.
 ## Testing
 
 ```bash
-python3 -m unittest discover -s tests     # 153 tests, ~3s, no install needed
+python3 -m unittest discover -s tests     # 161 tests, ~4s, no install needed
 ```
 
 The tests that matter most are the ones that stop the bot lying about itself:
@@ -244,7 +271,7 @@ The tests that matter most are the ones that stop the bot lying about itself:
 - **`test_consistent_loser_is_demoted_despite_zero_variance`** — regression for
   the ensemble bug below.
 
-### Three real bugs caught while building this
+### Four real bugs caught while building this
 
 1. **Equity was `cash + unrealised_pnl`.** But `cash` already carries the full
    notional of every fill, so this double-counted the entry and reported money
@@ -257,7 +284,15 @@ The tests that matter most are the ones that stop the bot lying about itself:
    every trade has *zero variance*, so the unfloored t-stat read `0.0` and the
    weight never moved. Fixed with a dispersion floor.
 
-3. **The breakout strategy could never fire.** The Donchian channel included the
+3. **Results depended on the time of day you ran them.** The simulator started
+   its bar clock at `time.time()`, and the risk manager rolls its daily-loss
+   window on UTC day boundaries — so where a run's bars fell relative to
+   midnight changed which trades got halted. Same seed, different afternoon,
+   different equity curve. Only scenarios with drawdowns deep enough to trip the
+   daily limit diverged, which is how it hid from a determinism test that passed.
+   Bars now start at a fixed epoch.
+
+4. **The breakout strategy could never fire.** The Donchian channel included the
    current bar, so a bar making a new high *became* the channel top — price could
    never be above it. `Donchian` now exposes `prev_upper`/`prev_lower`, the
    channel as it stood *before* the current bar.

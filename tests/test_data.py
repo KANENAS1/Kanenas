@@ -33,6 +33,26 @@ class TestSimulator(unittest.TestCase):
         self.assertEqual(ts, sorted(ts))
         self.assertEqual(len(set(ts)), len(ts))
 
+    def test_bar_clock_does_not_depend_on_wall_clock(self):
+        """Regression: the simulator once started its clock at time.time().
+
+        The risk manager rolls its daily-loss window on UTC day boundaries, so
+        where a run's bars fell relative to midnight changed which trades were
+        halted - the same seed produced different equity curves depending on
+        what hour you ran it. Only scenarios with drawdowns deep enough to trip
+        the daily limit diverged, which is why it hid from the other tests.
+        """
+        import time as _time
+        first = [e.candle.ts for e in MarketSimulator(SimulatorConfig(seed=3), bars=5).stream()]
+        _time.sleep(1.1)
+        second = [e.candle.ts for e in MarketSimulator(SimulatorConfig(seed=3), bars=5).stream()]
+        self.assertEqual(first, second)
+        self.assertLess(first[0], _time.time() - 86_400)   # a fixed past epoch, not "now"
+
+    def test_explicit_start_ts_is_honoured(self):
+        c = list(MarketSimulator(SimulatorConfig(seed=3, start_ts=1_000_000.0), bars=3).stream())
+        self.assertEqual([e.candle.ts for e in c], [1_000_000.0, 1_000_060.0, 1_000_120.0])
+
     def test_reproducible_for_a_given_seed(self):
         a = [e.candle.close for e in MarketSimulator(SimulatorConfig(seed=11), bars=200).stream()]
         b = [e.candle.close for e in MarketSimulator(SimulatorConfig(seed=11), bars=200).stream()]
