@@ -107,6 +107,17 @@ def cmd_run(args) -> int:
     feed, venue = build_feed(args)
     mode = "PAPER-SIM" if args.sim else "PAPER-LIVE"
 
+    from .data.rest import RestFeed
+    if isinstance(feed, RestFeed) and args.history > 0:
+        # Seed the chart and the indicators from real recent history, so the
+        # display opens full and the bot can act on the very first live bar.
+        history = feed.fetch_history(args.history)
+        closed = history[:-1] if len(history) > 1 else history   # last bar may still be open
+        n = engine.prime(closed)
+        feed.mark_seen(closed[-1].ts)
+        print(f"primed         {n} historical {args.interval} bars "
+              f"({closed[0].close:,.2f} -> {closed[-1].close:,.2f})")
+
     web = None
     if not args.no_web:
         from .ui.web import DashboardServer
@@ -299,6 +310,8 @@ def build_parser() -> argparse.ArgumentParser:
     common(r)
     r.add_argument("--bars", type=int, default=None, help="stop after N bars")
     r.add_argument("--speed", type=float, default=8.0, help="simulated bars per second (0 = unlimited)")
+    r.add_argument("--history", type=int, default=300,
+                   help="historical bars to preload on a live feed (0 to start cold)")
     r.add_argument("--port", type=int, default=8787)
     r.add_argument("--host", default="127.0.0.1")
     r.add_argument("--no-web", action="store_true")

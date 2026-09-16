@@ -33,6 +33,14 @@ that supports ANSI — Windows Terminal does, and the bot switches on VT mode
 automatically for the legacy console host. If it still looks like garbage, run
 with `--no-dashboard` and use the browser view.
 
+**Live starts warm.** A live feed only delivers bars as they close, so starting
+cold would mean a chart that grows one candle a minute and indicators that need
+an hour of wall-clock before the bot could trade at all. On launch it preloads
+recent history (`--history`, default 300 bars): the chart opens full and the
+strategies are ready on the first live bar. Those replayed bars produce no
+trades and no equity — they already happened, and trading them would fabricate
+a P&L that never existed.
+
 **Live BTC is the default.** No flag needed — `--symbol BTC` resolves to each
 venue's own spelling and the bot tries **binance → coinbase → kraken → bitstamp
 → okx → bybit** until one answers, so a regional block on any single exchange

@@ -328,6 +328,14 @@ class RestFeed:
         except FeedError:
             return None  # book is a nice-to-have; never kill the feed for it
 
+    def mark_seen(self, ts: float) -> None:
+        """Suppress bars at or before ``ts``.
+
+        Used after priming from history so the live stream resumes at the next
+        genuinely new bar instead of re-delivering ones already replayed.
+        """
+        self._last_ts = max(self._last_ts, ts)
+
     def stream(self) -> Iterator[MarketEvent]:
         """Yield each newly *closed* bar, polling just after each bar boundary."""
         backoff = 1.0

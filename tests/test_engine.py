@@ -84,6 +84,63 @@ class TestEngineBasics(unittest.TestCase):
         self.assertFalse(eng.portfolio.position.is_open)
 
 
+class TestLivePriming(unittest.TestCase):
+    """A live feed only yields bars as they close, so a cold start means an
+    empty chart that grows a candle a minute and an hour of dead time before
+    the indicators are usable."""
+
+    def history(self, n=300, seed=4):
+        return [e.candle for e in MarketSimulator(SimulatorConfig(seed=seed), bars=n).stream()]
+
+    def test_prime_warms_indicators_and_fills_the_chart(self):
+        eng = TradingEngine(EngineConfig())
+        self.assertFalse(eng.ind.warm)
+        n = eng.prime(self.history())
+        self.assertEqual(n, 300)
+        self.assertTrue(eng.ind.warm)
+        self.assertEqual(len(eng.ind.candles), 300)   # the chart opens full
+
+    def test_prime_invents_no_trades_or_equity(self):
+        """These bars already happened - trading them would fabricate a P&L."""
+        eng = TradingEngine(EngineConfig())
+        eng.prime(self.history())
+        self.assertEqual(eng.portfolio.trades, [])
+        self.assertEqual(eng.portfolio.equity_curve, [])
+        self.assertEqual(eng.portfolio.cash, eng.portfolio.starting_cash)
+        self.assertFalse(eng.portfolio.position.is_open)
+        self.assertEqual(eng.portfolio.fees_paid, 0.0)
+
+    def test_primed_engine_can_act_on_the_very_first_live_bar(self):
+        primed = TradingEngine(EngineConfig())
+        primed.prime(self.history())
+        cold = TradingEngine(EngineConfig())
+        nxt = next(iter(MarketSimulator(SimulatorConfig(seed=99), bars=1).stream()))
+        primed.process(nxt)
+        cold.process(nxt)
+        self.assertIsNotNone(primed.state.decision)    # has an opinion immediately
+        self.assertIsNone(cold.state.decision)         # still warming up
+
+    def test_prime_reports_the_last_price(self):
+        eng = TradingEngine(EngineConfig())
+        hist = self.history()
+        eng.prime(hist)
+        self.assertAlmostEqual(eng.state.price, hist[-1].close)
+        self.assertEqual(eng.state.bar, len(hist))
+
+    def test_prime_of_nothing_is_a_noop(self):
+        eng = TradingEngine(EngineConfig())
+        self.assertEqual(eng.prime([]), 0)
+        self.assertEqual(eng.state.bar, 0)
+
+    def test_mark_seen_suppresses_already_primed_bars(self):
+        from kanenas.data.rest import RestFeed
+        feed = RestFeed("BTCUSDT", "binance", "1m")
+        feed.mark_seen(1_700_000_000.0)
+        self.assertEqual(feed._last_ts, 1_700_000_000.0)
+        feed.mark_seen(1_600_000_000.0)                # never goes backwards
+        self.assertEqual(feed._last_ts, 1_700_000_000.0)
+
+
 class TestNoLookahead(unittest.TestCase):
     def test_decisions_do_not_depend_on_future_bars(self):
         """The defining property of an honest backtest.

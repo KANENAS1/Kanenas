@@ -102,6 +102,38 @@ class TradingEngine:
                 break
         return self
 
+    def prime(self, candles: List[Candle]) -> int:
+        """Warm indicators and strategy state from history, without trading.
+
+        A live feed only yields bars as they close, so starting cold means an
+        empty chart that grows one candle a minute and indicators that take an
+        hour of wall-clock to warm up - during which the bot cannot trade at
+        all. Replaying recent history fixes both: the chart opens full and the
+        book is ready on the first live bar.
+
+        No orders, fills or equity points are produced. These bars already
+        happened; trading them would invent a position and a P&L history that
+        never existed. Strategies carrying their own state (order-flow
+        smoothing, momentum returns, the squeeze window) are warmed by
+        evaluating them and discarding the result.
+        """
+        n = 0
+        for candle in candles:
+            self.ind.update(candle)
+            ctx = StrategyContext(self.cfg.symbol, candle, self.ind, None,
+                                  self.portfolio.position, self.portfolio.starting_cash)
+            self.ensemble.evaluate(ctx)   # discarded: called purely to warm state
+            n += 1
+        if n:
+            last = candles[-1]
+            self.state.bar += n
+            self.state.candle = last
+            self.state.price = last.close
+            self.state.push(LogEntry(last.ts, self.state.bar, "INFO",
+                                     f"primed {n} historical bars - indicators warm, "
+                                     f"last close {last.close:,.2f}", last.close))
+        return n
+
     def process(self, event: MarketEvent) -> None:
         st = self.state
         st.bar += 1
