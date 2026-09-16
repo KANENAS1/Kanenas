@@ -56,7 +56,7 @@
   .mag{color:var(--magenta)}.cy{color:var(--cyan)}.am{color:var(--amber)}
   .row{display:flex;justify-content:space-between;gap:8px;padding:1.5px 0}
   .row span:first-child{color:var(--dim)}
-  canvas{display:block;width:100%;border-radius:3px}
+  canvas{display:block;width:100%;max-width:100%;border-radius:3px}
   table{width:100%;border-collapse:collapse;font-size:11px}
   th{text-align:left;color:var(--dim);font-weight:500;font-size:9px;letter-spacing:.14em;
      padding:2px 6px 5px;border-bottom:1px solid var(--line)}
@@ -119,7 +119,7 @@
 
   <div class="panel chart">
     <h2 id="chartTitle">Price</h2>
-    <canvas id="candles" height="250"></canvas>
+    <canvas id="candles" data-h="250" height="250"></canvas>
     <div class="row" style="margin-top:6px">
       <span id="ohlc" class="muted">—</span><b id="chg">—</b>
     </div>
@@ -129,7 +129,7 @@
     <h2>Live Streak</h2>
     <div class="huge" id="streak">—</div>
     <div id="streakLabel" class="muted">—</div>
-    <canvas id="streakChart" height="96" style="margin:9px 0"></canvas>
+    <canvas id="streakChart" data-h="96" height="96" style="margin:9px 0"></canvas>
     <div class="row"><span>win rate</span><b id="winRate">—</b></div>
     <div class="row"><span>profit factor</span><b id="pf">—</b></div>
     <div class="row"><span>expectancy</span><b id="exp">—</b></div>
@@ -155,7 +155,7 @@
 
   <div class="panel equity">
     <h2>Equity Curve</h2>
-    <canvas id="equityChart" height="176"></canvas>
+    <canvas id="equityChart" data-h="176" height="176"></canvas>
     <div class="row" style="margin-top:5px"><span id="eqFrom">—</span><b id="eqTo">—</b></div>
   </div>
 
@@ -188,12 +188,20 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 /* Canvases are sized in CSS pixels but drawn at devicePixelRatio so the
    candles stay crisp on a retina screen (and in a screen recording). */
 function ctxFor(id){
-  const cv = $(id), dpr = window.devicePixelRatio || 1;
-  const w = cv.clientWidth, h = parseInt(cv.getAttribute("height"));
-  if (cv.width !== w*dpr || cv.height !== h*dpr){ cv.width = w*dpr; cv.height = h*dpr; }
+  /* The logical height lives in data-h and is never written back.
+     Assigning cv.height reflects into the HTML height attribute, so reading
+     the height back from that attribute each frame multiplied it by the device
+     pixel ratio every redraw - the canvas grew without bound on any display
+     where dpr > 1 (Windows at 125% scaling, or any phone). Stable at dpr 1,
+     which is exactly why it survived a desktop screenshot. */
+  const cv = $(id), dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, cv.clientWidth), h = +cv.dataset.h;
+  cv.style.height = h + "px";                 // pin the CSS box, not the buffer
+  const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+  if (cv.width !== bw || cv.height !== bh){ cv.width = bw; cv.height = bh; }
   const c = cv.getContext("2d");
-  c.setTransform(dpr,0,0,dpr,0,0);
-  c.clearRect(0,0,w,h);
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, w, h);
   return {c, w, h};
 }
 
