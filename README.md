@@ -12,6 +12,27 @@ python3 -m kanenas stress                    # try to break the strategy
 python3 -m unittest discover -s tests        # 165 tests, ~5 seconds
 ```
 
+### Windows
+
+`python3` is not a command on Windows — use `python`. If you see *"Python was
+not found; run without arguments to install from the Microsoft Store"*, that is
+Microsoft's placeholder shortcut, not Python. Install the real thing:
+
+```powershell
+winget install -e --id Python.Python.3.12
+winget install -e --id Git.Git
+# close and reopen PowerShell so PATH updates
+git clone https://github.com/KANENAS1/TWAi.git
+cd TWAi
+python -m kanenas doctor
+python -m kanenas run --open
+```
+
+The web dashboard works in any browser. The terminal dashboard needs a console
+that supports ANSI — Windows Terminal does, and the bot switches on VT mode
+automatically for the legacy console host. If it still looks like garbage, run
+with `--no-dashboard` and use the browser view.
+
 **Live BTC is the default.** No flag needed — `--symbol BTC` resolves to each
 venue's own spelling and the bot tries **binance → coinbase → kraken → bitstamp
 → okx → bybit** until one answers, so a regional block on any single exchange

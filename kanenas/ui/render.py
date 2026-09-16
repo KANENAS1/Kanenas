@@ -16,7 +16,37 @@ from typing import Iterable, List, Optional, Sequence
 
 # ------------------------------------------------------------------- colour
 
-_ENABLED = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None and os.environ.get("TERM") != "dumb"
+def _enable_windows_ansi() -> bool:
+    """Turn on VT processing so escape codes render instead of printing raw.
+
+    Windows Terminal handles ANSI natively, but the legacy console host - still
+    what you get from an old PowerShell or cmd shortcut - prints the escape
+    bytes literally unless a process asks for virtual-terminal mode. Without
+    this the dashboard renders as pages of garbage on exactly the machines
+    least likely to know why.
+    """
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)          # STD_OUTPUT_HANDLE
+        mode = ctypes.c_ulong()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        return bool(kernel32.SetConsoleMode(
+            handle, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
+    except Exception:
+        return False                                  # plain text still works
+
+
+_ENABLED = (
+    sys.stdout.isatty()
+    and os.environ.get("NO_COLOR") is None
+    and os.environ.get("TERM") != "dumb"
+    and _enable_windows_ansi()
+)
 
 
 def enable_color(flag: Optional[bool] = None) -> bool:
