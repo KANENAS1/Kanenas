@@ -122,6 +122,81 @@ def _kraken_parse_book(raw: object) -> tuple:
     return bids, asks
 
 
+
+
+# ---------------------------------------------------------------- bitstamp
+
+def _bitstamp_klines(sym: str, interval: str, limit: int) -> str:
+    return f"https://www.bitstamp.net/api/v2/ohlc/{sym}/?step={interval}&limit={min(1000, max(3, limit))}"
+
+
+def _bitstamp_parse(raw: object) -> List[Candle]:
+    rows = raw.get("data", {}).get("ohlc", [])
+    return [Candle(float(r["timestamp"]), float(r["open"]), float(r["high"]),
+                   float(r["low"]), float(r["close"]), float(r.get("volume", 0.0))) for r in rows]
+
+
+def _bitstamp_book(sym: str, depth: int) -> str:
+    return f"https://www.bitstamp.net/api/v2/order_book/{sym}/"
+
+
+def _bitstamp_parse_book(raw: object) -> tuple:
+    bids = tuple(BookLevel(float(p), float(q)) for p, q in raw.get("bids", [])[:20])
+    asks = tuple(BookLevel(float(p), float(q)) for p, q in raw.get("asks", [])[:20])
+    return bids, asks
+
+
+# --------------------------------------------------------------------- okx
+
+def _okx_klines(sym: str, interval: str, limit: int) -> str:
+    return f"https://www.okx.com/api/v5/market/candles?instId={sym}&bar={interval}&limit={min(300, max(3, limit))}"
+
+
+def _okx_parse(raw: object) -> List[Candle]:
+    if str(raw.get("code", "0")) not in ("0", ""):
+        raise FeedError(f"okx error: {raw.get('msg')}")
+    rows = sorted(raw.get("data", []), key=lambda r: int(r[0]))   # okx returns newest first
+    return [Candle(int(r[0]) / 1000.0, float(r[1]), float(r[2]), float(r[3]),
+                   float(r[4]), float(r[5])) for r in rows]
+
+
+def _okx_book(sym: str, depth: int) -> str:
+    return f"https://www.okx.com/api/v5/market/books?instId={sym}&sz={max(5, min(40, depth))}"
+
+
+def _okx_parse_book(raw: object) -> tuple:
+    d = (raw.get("data") or [{}])[0]
+    bids = tuple(BookLevel(float(r[0]), float(r[1])) for r in d.get("bids", []))
+    asks = tuple(BookLevel(float(r[0]), float(r[1])) for r in d.get("asks", []))
+    return bids, asks
+
+
+# ------------------------------------------------------------------- bybit
+
+def _bybit_klines(sym: str, interval: str, limit: int) -> str:
+    return (f"https://api.bybit.com/v5/market/kline?category=spot&symbol={sym}"
+            f"&interval={interval}&limit={min(1000, max(3, limit))}")
+
+
+def _bybit_parse(raw: object) -> List[Candle]:
+    if raw.get("retCode", 0) not in (0, "0"):
+        raise FeedError(f"bybit error: {raw.get('retMsg')}")
+    rows = sorted(raw.get("result", {}).get("list", []), key=lambda r: int(r[0]))
+    return [Candle(int(r[0]) / 1000.0, float(r[1]), float(r[2]), float(r[3]),
+                   float(r[4]), float(r[5])) for r in rows]
+
+
+def _bybit_book(sym: str, depth: int) -> str:
+    return (f"https://api.bybit.com/v5/market/orderbook?category=spot&symbol={sym}"
+            f"&limit={max(1, min(50, depth))}")
+
+
+def _bybit_parse_book(raw: object) -> tuple:
+    r = raw.get("result", {})
+    bids = tuple(BookLevel(float(x[0]), float(x[1])) for x in r.get("b", []))
+    asks = tuple(BookLevel(float(x[0]), float(x[1])) for x in r.get("a", []))
+    return bids, asks
+
 VENUES = {
     "binance": VenueSpec("binance", _binance_klines, _binance_parse, _binance_book, _binance_parse_book,
                          {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}),
@@ -129,7 +204,82 @@ VENUES = {
                           {"1m": "60", "5m": "300", "15m": "900", "1h": "3600", "6h": "21600", "1d": "86400"}),
     "kraken": VenueSpec("kraken", _kraken_klines, _kraken_parse, _kraken_book, _kraken_parse_book,
                         {"1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "1440"}),
+    "bitstamp": VenueSpec("bitstamp", _bitstamp_klines, _bitstamp_parse, _bitstamp_book, _bitstamp_parse_book,
+                          {"1m": "60", "5m": "300", "15m": "900", "1h": "3600", "4h": "14400", "1d": "86400"}),
+    "okx": VenueSpec("okx", _okx_klines, _okx_parse, _okx_book, _okx_parse_book,
+                     {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D"}),
+    "bybit": VenueSpec("bybit", _bybit_klines, _bybit_parse, _bybit_book, _bybit_parse_book,
+                       {"1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D"}),
 }
+
+#: The canonical BTC spot pair on each venue. Venues disagree on spelling
+#: (Kraken still calls Bitcoin XBT), so "BTC" is resolved per venue rather than
+#: making the user look it up.
+BTC_SYMBOL = {
+    "binance": "BTCUSDT",
+    "coinbase": "BTC-USD",
+    "kraken": "XBTUSD",
+    "bitstamp": "btcusd",
+    "okx": "BTC-USDT",
+    "bybit": "BTCUSDT",
+}
+
+#: Tried in this order. Binance first for depth and rate limits; Coinbase and
+#: Kraken next as the most widely reachable; the rest cover regions where the
+#: first three are geo-blocked.
+VENUE_ORDER = ["binance", "coinbase", "kraken", "bitstamp", "okx", "bybit"]
+
+
+def resolve_symbol(venue: str, symbol: Optional[str] = None) -> str:
+    """Map a friendly name to the venue's own spelling.
+
+    ``"BTC"`` (in any casing) becomes BTCUSDT on Binance and XBTUSD on Kraken.
+    Anything else is passed through untouched, so an explicit pair still works.
+    """
+    if symbol and symbol.strip().upper() not in ("BTC", "BTC-USD", "BTCUSD", "BITCOIN"):
+        return symbol
+    return BTC_SYMBOL[venue]
+
+
+def open_live_feed(
+    symbol: Optional[str] = "BTC",
+    interval: str = "1m",
+    venues: Optional[List[str]] = None,
+    with_book: bool = True,
+) -> "RestFeed":
+    """Return the first venue that actually answers, or raise.
+
+    Exchanges are geo-blocked in different places and go down at different
+    times, so binding to one venue makes the bot fail for reasons that have
+    nothing to do with trading. This probes each in turn with a real request -
+    a venue that resolves but returns garbage is not "reachable".
+
+    Raises ``FeedError`` listing every failure rather than silently degrading
+    to simulated data: a bot quietly trading a simulation while you believe it
+    is on live prices is far worse than one that refuses to start.
+    """
+    order = venues or VENUE_ORDER
+    failures = []
+    for venue in order:
+        if venue not in VENUES:
+            failures.append(f"{venue}: unknown venue")
+            continue
+        if interval not in VENUES[venue].interval_map:
+            failures.append(f"{venue}: no {interval} interval")
+            continue
+        feed = RestFeed(resolve_symbol(venue, symbol), venue, interval, with_book=with_book)
+        try:
+            candles = feed.fetch_history(limit=3)
+            if not candles or candles[-1].close <= 0:
+                raise FeedError("returned no usable candles")
+            return feed
+        except FeedError as exc:
+            failures.append(f"{venue}: {str(exc)[:110]}")
+    raise FeedError(
+        "No live venue reachable. Tried:\n  " + "\n  ".join(failures) +
+        "\n\nCheck your network, or pass --venue to pick one explicitly. "
+        "Use --sim to run the built-in simulator instead (clearly labelled, not live data)."
+    )
 
 INTERVAL_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "6h": 21600, "1d": 86400}
 

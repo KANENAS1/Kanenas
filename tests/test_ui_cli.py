@@ -151,7 +151,7 @@ class TestCli(unittest.TestCase):
     def test_backtest_command_prints_a_report(self):
         buf = io.StringIO()
         with redirect_stdout(buf):
-            rc = main(["backtest", "--bars", "600", "--seed", "5"])
+            rc = main(["backtest", "--sim", "--bars", "600", "--seed", "5"])
         out = buf.getvalue()
         self.assertEqual(rc, 0)
         self.assertIn("BACKTEST", out)
@@ -164,7 +164,7 @@ class TestCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "r.json"
             with redirect_stdout(io.StringIO()):
-                main(["backtest", "--bars", "400", "--report", str(path)])
+                main(["backtest", "--sim", "--bars", "400", "--report", str(path)])
             data = json.loads(path.read_text())
         self.assertIn("sharpe", data)
         self.assertIn("caveats", data)
@@ -172,9 +172,65 @@ class TestCli(unittest.TestCase):
     def test_run_command_completes_a_bounded_session(self):
         buf = io.StringIO()
         with redirect_stdout(buf):
-            rc = main(["run", "--bars", "300", "--speed", "0", "--no-web", "--no-dashboard"])
+            rc = main(["run", "--sim", "--bars", "300", "--speed", "0",
+                       "--no-web", "--no-dashboard"])
         self.assertEqual(rc, 0)
         self.assertIn("BACKTEST", buf.getvalue())
+
+    def test_live_data_is_the_default(self):
+        """--sim must be opt-in: the bot defaults to real BTC prices."""
+        args = build_parser().parse_args(["backtest"])
+        self.assertFalse(args.sim)
+        self.assertEqual(args.symbol, "BTC")
+        self.assertIsNone(args.venue)          # auto-failover across venues
+
+    def test_btc_resolves_to_each_venues_own_spelling(self):
+        from kanenas.data.rest import BTC_SYMBOL, VENUE_ORDER, resolve_symbol
+        self.assertEqual(resolve_symbol("binance", "BTC"), "BTCUSDT")
+        self.assertEqual(resolve_symbol("kraken", "BTC"), "XBTUSD")
+        self.assertEqual(resolve_symbol("coinbase", "btc"), "BTC-USD")
+        self.assertEqual(resolve_symbol("binance", "ETHUSDT"), "ETHUSDT")   # passthrough
+        for v in VENUE_ORDER:
+            self.assertIn(v, BTC_SYMBOL)
+
+    def test_no_live_venue_refuses_rather_than_simulating(self):
+        """Silently trading synthetic prices you believe are live is the worst
+        failure this tool could have, so the failure is loud and explicit."""
+        from kanenas.data import rest
+        original = rest._get
+        rest._get = lambda *a, **k: (_ for _ in ()).throw(rest.FeedError("blocked"))
+        try:
+            with self.assertRaises(rest.FeedError) as ctx:
+                rest.open_live_feed("BTC", "1m")
+            msg = str(ctx.exception)
+            self.assertIn("No live venue reachable", msg)
+            self.assertIn("--sim", msg)
+            for v in rest.VENUE_ORDER:
+                self.assertIn(v, msg)          # every attempt is reported
+        finally:
+            rest._get = original
+
+    def test_failover_picks_the_first_venue_that_answers(self):
+        from kanenas.data import rest
+        original, seen = rest._get, []
+
+        def fake(url, timeout=12.0):
+            seen.append(url)
+            if "binance" in url or "coinbase" in url:
+                raise rest.FeedError("geo-blocked")
+            if "kraken" in url:
+                return {"error": [], "result": {"XXBTZUSD": [
+                    [1700000000, "1", "2", "0.5", "1.5", "1", "9", 3]]}}
+            raise rest.FeedError("unexpected venue")
+
+        rest._get = fake
+        try:
+            feed = rest.open_live_feed("BTC", "1m")
+            self.assertEqual(feed.venue, "kraken")
+            self.assertEqual(feed.symbol, "XBTUSD")
+            self.assertTrue(any("binance" in u for u in seen))   # tried first
+        finally:
+            rest._get = original
 
     def test_unknown_command_exits_nonzero(self):
         with self.assertRaises(SystemExit):
@@ -182,7 +238,7 @@ class TestCli(unittest.TestCase):
 
     def test_risk_flags_are_threaded_into_the_engine(self):
         from kanenas.cli import build_engine
-        args = build_parser().parse_args(["backtest", "--risk", "0.02", "--max-dd", "0.1",
+        args = build_parser().parse_args(["backtest", "--sim", "--risk", "0.02", "--max-dd", "0.1",
                                           "--fee-bps", "12", "--threshold", "0.5"])
         eng = build_engine(args)
         self.assertAlmostEqual(eng.risk.cfg.risk_per_trade, 0.02)

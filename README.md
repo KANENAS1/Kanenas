@@ -6,18 +6,25 @@ dashboards. **Zero dependencies** — pure Python 3.9+ standard library.
 ![dashboard](docs/dashboard.png)
 
 ```bash
-python3 -m kanenas run --speed 8 --open      # live paper session + dashboards
-python3 -m kanenas backtest --bars 5000      # full statistical report
+python3 -m kanenas run --open                # live BTC, paper fills, dashboards
+python3 -m kanenas backtest --bars 5000      # live BTC history + full report
 python3 -m kanenas stress                    # try to break the strategy
-python3 -m unittest discover -s tests        # 161 tests, ~4 seconds
+python3 -m unittest discover -s tests        # 165 tests, ~5 seconds
 ```
+
+**Live BTC is the default.** No flag needed — `--symbol BTC` resolves to each
+venue's own spelling and the bot tries **binance → coinbase → kraken → bitstamp
+→ okx → bybit** until one answers, so a regional block on any single exchange
+does not stop it. If none answer it **refuses to run** and says so, rather than
+quietly substituting synthetic prices. The simulator is opt-in behind `--sim`
+and is labelled `PAPER-SIM` everywhere it appears.
 
 ---
 
 ## Read this before anything else
 
-This bot **paper trades**. It simulates fills against a model of a real venue and
-never places an order. `LiveBroker` exists but deliberately refuses to arm, and
+This bot **paper trades**. It reads real BTC prices, then simulates fills against
+a model of a real venue and never places an order. `LiveBroker` exists but deliberately refuses to arm, and
 raises `NotImplementedError` even when it does — wiring real order placement is a
 decision you make explicitly, not something you inherit by running a demo.
 
@@ -68,7 +75,7 @@ lets a strategy backtested on ten years of CSV run unchanged against a live feed
 | `core/types.py` | Domain objects: `Candle`, `OrderBook`, `Signal`, `Order`, `Fill`, `Position`, `Trade` |
 | `core/indicators.py` | Streaming EMA, RSI, ATR, MACD, Bollinger, Donchian, realised vol |
 | `data/simulator.py` | Regime-switching, GARCH-clustered, jump-diffusion market generator |
-| `data/rest.py` | Live candles from Binance / Coinbase / Kraken |
+| `data/rest.py` | Live BTC candles from six venues, with automatic failover |
 | `data/replay.py` | CSV load/save for reproducible backtests |
 | `strategy/*.py` | Five independent alpha models |
 | `strategy/ensemble.py` | Blends signals; re-weights each model by its own realised P&L |
@@ -300,15 +307,18 @@ The tests that matter most are the ones that stop the bot lying about itself:
 ## Usage
 
 ```bash
-# Paper session with both dashboards (web at http://127.0.0.1:8787)
-python3 -m kanenas run --speed 8 --open
+# Live BTC with both dashboards (web at http://127.0.0.1:8787)
+python3 -m kanenas run --open
 
-# Live market data from a real venue — still paper fills, no real orders
-python3 -m kanenas run --live --venue binance --symbol BTCUSDT --interval 1m
+# Pin one venue instead of auto-failover, or change timeframe
+python3 -m kanenas run --venue kraken --interval 5m
 
-# Download candles once, then backtest against the same bytes forever
-python3 -m kanenas fetch --venue binance --symbol BTCUSDT --bars 1000 --out data/btc.csv
+# Download live candles once, then backtest the same bytes forever
+python3 -m kanenas fetch --bars 1000 --out data/btc.csv
 python3 -m kanenas backtest --csv data/btc.csv --report reports/btc.json
+
+# Offline: the built-in simulator, always labelled as not-live
+python3 -m kanenas run --sim --speed 8
 
 # Tune risk
 python3 -m kanenas backtest --risk 0.005 --stop-atr 2.5 --max-dd 0.15 --fee-bps 10
@@ -317,7 +327,8 @@ python3 -m kanenas backtest --risk 0.005 --stop-atr 2.5 --max-dd 0.15 --fee-bps 
 python3 -m kanenas doctor
 ```
 
-Key flags: `--risk` (fraction of equity per trade), `--stop-atr` / `--target-atr`,
+Key flags: `--sim` (simulator instead of live), `--venue` (pin one exchange),
+`--risk` (fraction of equity per trade), `--stop-atr` / `--target-atr`,
 `--max-dd`, `--threshold` (ensemble conviction needed), `--agreement`,
 `--fee-bps`, `--min-edge` (cost gate), `--no-adaptive` (freeze weights),
 `--no-shorts`, `--seed`. Full list: `python3 -m kanenas <command> --help`.
