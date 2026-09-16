@@ -18,6 +18,11 @@ class MarketEvent:
     symbol: str
     candle: Candle
     book: Optional[OrderBook] = None
+    #: True for a bar replayed to fill a gap after an outage. Such a bar is
+    #: real history and must still be tested against stops - that is the whole
+    #: point of replaying it - but it must never *open* a position: entering at
+    #: a price from half an hour ago is a fill that could not have happened.
+    backfill: bool = False
 
     @property
     def price(self) -> float:
@@ -34,6 +39,13 @@ class MarketFeed(Protocol):
     symbol: str
     name: str
 
-    def stream(self) -> Iterator[MarketEvent]:
-        """Yield market events until exhausted (backtest) or forever (live)."""
+    def stream(self) -> Iterator[Optional[MarketEvent]]:
+        """Yield market events until exhausted (backtest) or forever (live).
+
+        A real-time feed may also yield ``None`` as a heartbeat, meaning "still
+        alive, no new bar yet". Consumers must skip it. Without it a caller
+        blocked in ``next()`` cannot tell a quiet market from a dead feed, and
+        an open position's stop would go unevaluated for as long as the silence
+        lasted. Historical feeds never yield ``None``.
+        """
         ...

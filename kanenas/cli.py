@@ -131,7 +131,8 @@ def cmd_run(args) -> int:
     runner = LiveRunner(
         engine, feed,
         RunnerConfig(speed=args.speed, max_bars=args.bars, render=args.dashboard,
-                     mode=mode, venue=venue),
+                     mode=mode, venue=venue,
+                     bar_seconds=getattr(feed, "bar_seconds", 0.0) if not args.sim else 0.0),
         web=web,
     )
     try:

@@ -120,6 +120,8 @@ def serialise(engine: TradingEngine, mode: str, venue: str, started: float) -> d
         "halted": engine.risk.halted,
         "halt_reason": engine.risk.halt_reason,
         "paused": engine.paused,
+        "feed_health": engine.feed_health,
+        "feed_stale": engine.feed_stale,
         "risk_rejections": dict(engine.risk.rejections),
         "trades": [
             {"side": t.direction.name, "reason": t.reason.value, "net": t.net_pnl,
@@ -218,7 +220,9 @@ class DashboardServer:
 
                 self._send(json.dumps({
                     "ok": True, "action": action, "message": message,
-                    "paused": engine.paused, "halted": engine.risk.halted,
+                    "paused": engine.paused,
+        "feed_health": engine.feed_health,
+        "feed_stale": engine.feed_stale, "halted": engine.risk.halted,
                 }).encode(), "application/json")
 
             def do_GET(self) -> None:  # noqa: N802

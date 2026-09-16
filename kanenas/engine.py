@@ -97,6 +97,9 @@ class TradingEngine:
         #: management on a live position is never what "pause" should mean.
         self.paused = False
         self._flatten_request = False
+        #: set by the runner's watchdog; blocks new entries while data is stale
+        self.feed_stale = False
+        self.feed_health = "STARTING"
 
     # ------------------------------------------------------------- controls
 
@@ -112,6 +115,20 @@ class TradingEngine:
         self.paused = False
         self.state.push(LogEntry(self.state.candle.ts if self.state.candle else 0.0,
                                  self.state.bar, "INFO", "RESUMED by operator", self.state.price))
+
+    def set_feed_health(self, health: str, can_open: bool, note: Optional[str] = None) -> None:
+        """Record feed health. Stale data blocks new risk but never fakes an exit.
+
+        There is no honest way to close a position without prices, so a dead
+        feed cannot flatten - it can only stop the bot taking on *more* risk
+        and make the situation loud.
+        """
+        self.feed_health = health
+        self.feed_stale = not can_open
+        if note:
+            kind = "HALT" if not can_open else "INFO"
+            self.state.push(LogEntry(self.state.candle.ts if self.state.candle else 0.0,
+                                     self.state.bar, kind, note, self.state.price))
 
     def request_flatten(self) -> bool:
         """Ask to close any open position on the next bar.
@@ -139,8 +156,10 @@ class TradingEngine:
 
     # ------------------------------------------------------------------ loop
 
-    def run(self, feed_events: Iterator[MarketEvent], max_bars: Optional[int] = None) -> "TradingEngine":
+    def run(self, feed_events: Iterator[Optional[MarketEvent]], max_bars: Optional[int] = None) -> "TradingEngine":
         for n, event in enumerate(feed_events):
+            if event is None:      # heartbeat from a live feed
+                continue
             self.process(event)
             if max_bars is not None and n + 1 >= max_bars:
                 break
@@ -249,6 +268,16 @@ class TradingEngine:
         st = self.state
         if self.paused:
             st.push(LogEntry(event.ts, st.bar, "SKIP", "paused - entry suppressed", st.price))
+            return
+        if self.feed_stale:
+            st.push(LogEntry(event.ts, st.bar, "SKIP",
+                             f"feed {self.feed_health} - refusing new risk on stale data", st.price))
+            return
+        if event.backfill:
+            # replayed after an outage: old enough that entering here would be
+            # a fill that never could have happened. Exits already ran above.
+            st.push(LogEntry(event.ts, st.bar, "SKIP",
+                             "backfilled bar - exits only, no new entry", st.price))
             return
         if decision.direction is Direction.SHORT and not self.cfg.allow_shorts:
             st.push(LogEntry(event.ts, st.bar, "SKIP", "short signal but shorts disabled", st.price))

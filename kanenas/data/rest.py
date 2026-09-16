@@ -295,6 +295,8 @@ class RestFeed:
         limit: int = 500,
         with_book: bool = True,
         poll_slack: float = 2.0,
+        max_backfill: int = 500,
+        heartbeat_seconds: float = 5.0,
     ) -> None:
         if venue not in VENUES:
             raise ValueError(f"unknown venue {venue!r}; choose from {sorted(VENUES)}")
@@ -308,6 +310,8 @@ class RestFeed:
         self.limit = limit
         self.with_book = with_book
         self.poll_slack = poll_slack
+        self.max_backfill = max_backfill
+        self.heartbeat_seconds = heartbeat_seconds
         self.bar_seconds = INTERVAL_SECONDS[interval]
         self._last_ts = 0.0
 
@@ -336,22 +340,53 @@ class RestFeed:
         """
         self._last_ts = max(self._last_ts, ts)
 
-    def stream(self) -> Iterator[MarketEvent]:
-        """Yield each newly *closed* bar, polling just after each bar boundary."""
+    def stream(self) -> Iterator[Optional[MarketEvent]]:
+        """Yield each newly closed bar; yield ``None`` as a heartbeat.
+
+        Two things here exist because of what silence costs.
+
+        **Backfill.** After an outage this yields *every* bar that was missed,
+        oldest first - not just the newest. The engine only evaluates stops when
+        a bar arrives, so skipping the gap would mean a stop was never tested
+        against the prices that would have triggered it. Replaying the gap
+        exits the position at roughly where it should have exited.
+
+        **Heartbeats.** A caller blocked in ``next()`` cannot notice that
+        nothing is arriving. Yielding ``None`` while waiting or retrying hands
+        control back so a watchdog can run and the display can say "stale"
+        instead of showing a last-known price that looks like a calm market.
+        """
         backoff = 1.0
         while True:
             try:
-                candles = self.fetch_history(limit=3)
+                need = 3
+                if self._last_ts:
+                    missed = int((time.time() - self._last_ts) / self.bar_seconds) + 2
+                    need = max(3, min(missed, self.max_backfill))
+                candles = self.fetch_history(limit=need)
                 backoff = 1.0
-            except FeedError as exc:
-                # transient venue/network trouble: back off, never spin
+            except FeedError:
+                yield None                      # let the caller notice the silence
                 time.sleep(min(backoff, 60.0))
-                backoff *= 2
+                backoff = min(backoff * 2, 60.0)
                 continue
-            closed = candles[-2] if len(candles) >= 2 else candles[-1]
-            if closed.ts > self._last_ts:
-                self._last_ts = closed.ts
-                yield MarketEvent(self.symbol, closed, self.fetch_book())
+
+            # the most recent bar may still be open; everything before it is closed
+            closed = candles[:-1] if len(candles) >= 2 else candles
+            fresh = [c for c in closed if c.ts > self._last_ts]
+            book = self.fetch_book() if fresh else None
+            for i, candle in enumerate(fresh):
+                self._last_ts = candle.ts
+                # only the newest bar gets the live book - the rest are history,
+                # and pairing an old bar with a current book would be a lie
+                is_last = i == len(fresh) - 1
+                yield MarketEvent(self.symbol, candle,
+                                  book if is_last else None,
+                                  backfill=not is_last)
+
             now = time.time()
-            next_close = (now // self.bar_seconds + 1) * self.bar_seconds
-            time.sleep(max(1.0, next_close - now + self.poll_slack))
+            deadline = (now // self.bar_seconds + 1) * self.bar_seconds + self.poll_slack
+            while time.time() < deadline:
+                time.sleep(min(self.heartbeat_seconds, max(0.25, deadline - time.time())))
+                if time.time() < deadline:
+                    yield None                  # still alive, just nothing new yet
