@@ -232,6 +232,77 @@ class TestExitDiscipline(unittest.TestCase):
         self.assertFalse(eng.portfolio.position.is_open)
 
 
+class TestOperatorControls(unittest.TestCase):
+    def engine_with_position(self, bars=820, seed=2024):
+        eng = TradingEngine(EngineConfig())
+        events = list(MarketSimulator(SimulatorConfig(seed=seed), bars=bars).stream())
+        for e in events:
+            eng.process(e)
+        return eng, events
+
+    def test_pause_blocks_new_entries(self):
+        eng, events = self.engine_with_position(600)
+        eng.pause()
+        before = len(eng.portfolio.trades)
+        opened = eng.portfolio.position.is_open
+        for e in MarketSimulator(SimulatorConfig(seed=31), bars=150).stream():
+            eng.process(e)
+        if not opened:
+            self.assertFalse(eng.portfolio.position.is_open)
+        self.assertTrue(any("paused" in x.message for x in eng.state.log))
+
+    def test_pause_keeps_managing_an_open_position(self):
+        """Pause must not abandon risk management on a live position."""
+        eng = TradingEngine(EngineConfig())
+        events = list(MarketSimulator(SimulatorConfig(seed=2024), bars=900).stream())
+        for e in events:
+            eng.process(e)
+            if eng.portfolio.position.is_open:
+                break
+        self.assertTrue(eng.portfolio.position.is_open)
+        eng.pause()
+        stop, target = eng.portfolio.position.stop_price, eng.portfolio.position.take_profit
+        self.assertGreater(stop, 0)
+        self.assertGreater(target, 0)
+        for e in MarketSimulator(SimulatorConfig(seed=55), bars=300).stream():
+            eng.process(e)
+            if not eng.portfolio.position.is_open:
+                break
+        self.assertFalse(eng.portfolio.position.is_open)   # an exit still fired
+
+    def test_resume_restores_trading(self):
+        eng, _ = self.engine_with_position(600)
+        eng.pause(); eng.resume()
+        self.assertFalse(eng.paused)
+
+    def test_flatten_closes_on_the_next_bar_and_does_not_re_enter(self):
+        eng = TradingEngine(EngineConfig())
+        events = list(MarketSimulator(SimulatorConfig(seed=2024), bars=900).stream())
+        idx = 0
+        for i, e in enumerate(events):
+            eng.process(e)
+            if eng.portfolio.position.is_open:
+                idx = i
+                break
+        self.assertTrue(eng.request_flatten())
+        eng.process(events[idx + 1])
+        self.assertFalse(eng.portfolio.position.is_open)
+        self.assertIs(eng.portfolio.trades[-1].reason, ExitReason.MANUAL)
+
+    def test_flatten_when_flat_reports_nothing_to_do(self):
+        eng = TradingEngine(EngineConfig())
+        self.assertFalse(eng.request_flatten())
+
+    def test_halt_stops_trading_and_flattens(self):
+        eng, events = self.engine_with_position(820)
+        eng.halt("test kill switch")
+        self.assertTrue(eng.risk.halted)
+        self.assertTrue(eng.paused)
+        for e in MarketSimulator(SimulatorConfig(seed=7), bars=120).stream():
+            eng.process(e)
+        self.assertFalse(eng.portfolio.position.is_open)
+
+
 class TestReporting(unittest.TestCase):
     def test_report_fields_are_consistent(self):
         eng, rep = run_backtest(MarketSimulator(SimulatorConfig(seed=17), bars=2_000).stream(),

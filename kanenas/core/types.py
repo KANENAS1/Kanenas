@@ -54,6 +54,7 @@ class ExitReason(str, Enum):
     TRAILING_STOP = "TRAIL"
     TIME_STOP = "TIME"
     SIGNAL_FLIP = "FLIP"
+    MANUAL = "MANUAL"
     RISK_HALT = "HALT"
     SHUTDOWN = "EOD"
 

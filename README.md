@@ -147,6 +147,24 @@ of attributed P&L becomes a bounded multiplier on each base weight, so a model
 that stops working is quietly demoted instead of dragging the book down. The
 bounds matter: unbounded adaptation is overfitting with extra steps.
 
+## Controls
+
+The browser dashboard is not just a display — it can stop the bot:
+
+| Control | What it does |
+|---|---|
+| **PAUSE** | No new entries. An open position **keeps its stop and target** — abandoning risk management on a live position is never what "pause" should mean. |
+| **FLATTEN** | Closes any open position on the next bar, and does not re-enter on that bar. Deferred rather than instant because closing mid-bar would have to invent a price, and every other exit here is priced from a real bar. |
+| **HALT** | Kill switch: stops trading and flattens. Takes a deliberate second click, and only a restart undoes it. |
+
+`Ctrl+C` in the terminal also stops cleanly and flattens.
+
+**These endpoints are guarded.** "Localhost with no auth" stops being safe the
+moment a request can *do* something — any page you happen to have open could
+POST to `127.0.0.1` and flatten your book. So control requests must carry a
+token minted per server and published only in the served page, and must not
+arrive with a foreign `Origin`. Reads stay open; they change nothing.
+
 ## How risk actually works
 
 `risk/manager.py` is the only file allowed to size a position — one file to

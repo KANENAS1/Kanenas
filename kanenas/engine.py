@@ -92,6 +92,50 @@ class TradingEngine:
         #: which strategies voted for the currently-open position (for attribution)
         self._open_contributions: Dict[str, float] = {}
         self.on_event: Optional[Callable[["TradingEngine"], None]] = None
+        #: operator controls. Paused stops *new* entries only - an open
+        #: position keeps its stop and target, because abandoning risk
+        #: management on a live position is never what "pause" should mean.
+        self.paused = False
+        self._flatten_request = False
+
+    # ------------------------------------------------------------- controls
+
+    def pause(self) -> None:
+        self.paused = True
+        self.state.push(LogEntry(self.state.candle.ts if self.state.candle else 0.0,
+                                 self.state.bar, "INFO",
+                                 "PAUSED by operator - no new entries; "
+                                 "open position keeps its stop and target",
+                                 self.state.price))
+
+    def resume(self) -> None:
+        self.paused = False
+        self.state.push(LogEntry(self.state.candle.ts if self.state.candle else 0.0,
+                                 self.state.bar, "INFO", "RESUMED by operator", self.state.price))
+
+    def request_flatten(self) -> bool:
+        """Ask to close any open position on the next bar.
+
+        Deferred rather than immediate: closing mid-bar would have to invent a
+        price, and every other exit in this engine is priced from a real bar.
+        Returns whether there was anything to close.
+        """
+        if not self.portfolio.position.is_open:
+            return False
+        self._flatten_request = True
+        self.state.push(LogEntry(self.state.candle.ts if self.state.candle else 0.0,
+                                 self.state.bar, "INFO",
+                                 "FLATTEN requested - closing on the next bar", self.state.price))
+        return True
+
+    def halt(self, reason: str = "operator kill switch") -> None:
+        """Stop trading entirely and flatten. Only a restart resumes."""
+        self.risk.halted = True
+        self.risk.halt_reason = reason
+        self.paused = True
+        self._flatten_request = self.portfolio.position.is_open
+        self.state.push(LogEntry(self.state.candle.ts if self.state.candle else 0.0,
+                                 self.state.bar, "HALT", f"HALTED - {reason}", self.state.price))
 
     # ------------------------------------------------------------------ loop
 
@@ -149,7 +193,14 @@ class TradingEngine:
         self.risk.on_bar(event.ts, equity, self.portfolio.peak_equity, st.bar)
 
         # 1. exits first, always
-        self._check_exits(event)
+        flattened = False
+        if self._flatten_request:
+            flattened = bool(self.portfolio.position.is_open)
+            if flattened:
+                self._close(event, ExitReason.MANUAL)
+            self._flatten_request = False
+        else:
+            self._check_exits(event)
 
         # 2. is the book warm enough to have an opinion?
         if st.bar <= self.cfg.warmup_bars or not self.ind.warm:
@@ -166,6 +217,14 @@ class TradingEngine:
         if self.risk.halted:
             if self.portfolio.position.is_open:
                 self._close(event, ExitReason.RISK_HALT)
+            self._notify()
+            return
+
+        if flattened:
+            # Re-entering on the very bar the operator asked to be flat defeats
+            # the request. One bar of quiet; Pause or Halt is how you stay out.
+            st.push(LogEntry(event.ts, st.bar, "SKIP",
+                             "flattened this bar - no re-entry until the next", st.price))
             self._notify()
             return
 
@@ -188,6 +247,9 @@ class TradingEngine:
 
     def _try_enter(self, event: MarketEvent, decision: EnsembleDecision) -> None:
         st = self.state
+        if self.paused:
+            st.push(LogEntry(event.ts, st.bar, "SKIP", "paused - entry suppressed", st.price))
+            return
         if decision.direction is Direction.SHORT and not self.cfg.allow_shorts:
             st.push(LogEntry(event.ts, st.bar, "SKIP", "short signal but shorts disabled", st.price))
             return

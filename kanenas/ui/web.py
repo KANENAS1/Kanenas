@@ -5,13 +5,21 @@ buy nothing here and would cost the "clone it and run it" property that makes
 this repo easy to trust.  The engine runs on a worker thread and simply mutates
 its own state; the HTTP thread serialises a snapshot whenever the page asks.
 
-Binds to 127.0.0.1 by default.  This endpoint exposes your live position and
-P&L and has no authentication, so it should never be put on a public interface.
+Binds to 127.0.0.1 by default.  The read endpoints expose your live position and
+P&L; the control endpoint can pause trading and close positions.  Neither should
+ever be put on a public interface.
+
+The control endpoint is guarded, because "localhost with no auth" is not safe
+once a request can *do* something: any page you happen to have open could POST
+to 127.0.0.1 and flatten your book.  So control requests must carry a token
+minted per server and delivered only in the served page, and must not arrive
+with a foreign ``Origin``.  Reads stay open - they change nothing.
 """
 
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 import time
 import webbrowser
@@ -111,6 +119,7 @@ def serialise(engine: TradingEngine, mode: str, venue: str, started: float) -> d
         "attribution": engine.ensemble.snapshot(),
         "halted": engine.risk.halted,
         "halt_reason": engine.risk.halt_reason,
+        "paused": engine.paused,
         "risk_rejections": dict(engine.risk.rejections),
         "trades": [
             {"side": t.direction.name, "reason": t.reason.value, "net": t.net_pnl,
@@ -136,6 +145,8 @@ class DashboardServer:
         self.mode = mode
         self.venue = venue
         self.started = time.time()
+        #: minted per server; the page is the only place it is published
+        self.token = secrets.token_urlsafe(18)
         self._httpd: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
@@ -157,11 +168,65 @@ class DashboardServer:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _same_origin(self) -> bool:
+                """Reject a cross-site POST; allow a tool that sends no Origin."""
+                origin = self.headers.get("Origin")
+                if origin is None:
+                    return True                      # curl, scripts - no browser context
+                host = self.headers.get("Host", "")
+                return origin.rstrip("/").endswith(host)
+
+            def do_POST(self) -> None:  # noqa: N802
+                if self.path.split("?")[0] != "/api/control":
+                    self._send(b'{"error":"not found"}', "application/json", 404)
+                    return
+                if not self._same_origin():
+                    self._send(b'{"error":"cross-origin control request refused"}',
+                               "application/json", 403)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    body = json.loads(self.rfile.read(min(length, 4096)) or b"{}")
+                except (ValueError, json.JSONDecodeError):
+                    self._send(b'{"error":"malformed request"}', "application/json", 400)
+                    return
+                if not secrets.compare_digest(str(body.get("token", "")), server.token):
+                    self._send(b'{"error":"bad or missing token"}', "application/json", 403)
+                    return
+
+                engine = server.engine
+                action = str(body.get("action", ""))
+                if action == "pause":
+                    engine.pause()
+                    message = "Paused. Open position keeps its stop and target."
+                elif action == "resume":
+                    if engine.risk.halted:
+                        self._send(b'{"error":"halted - restart the bot to resume"}',
+                                   "application/json", 409)
+                        return
+                    engine.resume()
+                    message = "Resumed."
+                elif action == "flatten":
+                    message = ("Closing on the next bar." if engine.request_flatten()
+                               else "Already flat - nothing to close.")
+                elif action == "halt":
+                    engine.halt("operator kill switch (dashboard)")
+                    message = "Halted. Trading stopped; restart the bot to resume."
+                else:
+                    self._send(b'{"error":"unknown action"}', "application/json", 400)
+                    return
+
+                self._send(json.dumps({
+                    "ok": True, "action": action, "message": message,
+                    "paused": engine.paused, "halted": engine.risk.halted,
+                }).encode(), "application/json")
+
             def do_GET(self) -> None:  # noqa: N802
                 path = self.path.split("?")[0]
                 if path in ("/", "/index.html"):
-                    html = (STATIC / "dashboard.html").read_bytes()
-                    self._send(html, "text/html; charset=utf-8")
+                    html = (STATIC / "dashboard.html").read_text(encoding="utf-8")
+                    html = html.replace("__CONTROL_TOKEN__", server.token)
+                    self._send(html.encode("utf-8"), "text/html; charset=utf-8")
                 elif path == "/api/state":
                     payload = serialise(server.engine, server.mode, server.venue, server.started)
                     self._send(json.dumps(payload).encode(), "application/json")

@@ -188,6 +188,77 @@ class TestWebDashboard(unittest.TestCase):
         finally:
             srv.stop()
 
+    def _post(self, port, body, origin=None):
+        import urllib.error, urllib.request
+        headers = {"Content-Type": "application/json"}
+        if origin:
+            headers["Origin"] = origin
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/control",
+                                     data=json.dumps(body).encode(), headers=headers)
+        try:
+            r = urllib.request.urlopen(req, timeout=5)
+            return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    def test_control_requires_the_token(self):
+        """Localhost with no auth stops being safe once a request can *do*
+        something - any page you have open could POST and flatten your book."""
+        srv = DashboardServer(warm_engine(bars=300), port=0)
+        srv.start()
+        port = srv._httpd.server_address[1]
+        try:
+            self.assertEqual(self._post(port, {"action": "pause"})[0], 403)
+            self.assertEqual(self._post(port, {"action": "pause", "token": "wrong"})[0], 403)
+            self.assertFalse(srv.engine.paused)
+        finally:
+            srv.stop()
+
+    def test_control_refuses_a_cross_origin_post(self):
+        srv = DashboardServer(warm_engine(bars=300), port=0)
+        srv.start()
+        port = srv._httpd.server_address[1]
+        try:
+            code, body = self._post(port, {"action": "pause", "token": srv.token},
+                                    origin="http://evil.example")
+            self.assertEqual(code, 403)
+            self.assertIn("cross-origin", body["error"])
+            self.assertFalse(srv.engine.paused)
+        finally:
+            srv.stop()
+
+    def test_control_actions_work_with_a_valid_token(self):
+        srv = DashboardServer(warm_engine(bars=300), port=0)
+        srv.start()
+        port = srv._httpd.server_address[1]
+        try:
+            t = srv.token
+            self.assertEqual(self._post(port, {"action": "pause", "token": t})[0], 200)
+            self.assertTrue(srv.engine.paused)
+            self.assertEqual(self._post(port, {"action": "resume", "token": t})[0], 200)
+            self.assertFalse(srv.engine.paused)
+            self.assertEqual(self._post(port, {"action": "halt", "token": t})[0], 200)
+            self.assertTrue(srv.engine.risk.halted)
+            # once halted, only a restart resumes
+            self.assertEqual(self._post(port, {"action": "resume", "token": t})[0], 409)
+            self.assertEqual(self._post(port, {"action": "bogus", "token": t})[0], 400)
+        finally:
+            srv.stop()
+
+    def test_token_is_published_only_in_the_page(self):
+        import urllib.request
+        srv = DashboardServer(warm_engine(bars=300), port=0)
+        srv.start()
+        port = srv._httpd.server_address[1]
+        try:
+            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5).read().decode()
+            self.assertIn(srv.token, page)
+            self.assertNotIn("__CONTROL_TOKEN__", page)
+            state = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=5).read().decode()
+            self.assertNotIn(srv.token, state)      # never leaked through the read API
+        finally:
+            srv.stop()
+
     def test_server_binds_loopback_by_default(self):
         self.assertEqual(DashboardServer(TradingEngine(EngineConfig())).host, "127.0.0.1")
 
